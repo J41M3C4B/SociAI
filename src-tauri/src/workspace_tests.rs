@@ -150,9 +150,9 @@ fn every_module_the_app_links_is_in_the_registry() {
 }
 
 /// The conformance test (the ERP blueprint §4). The registry already refused a manifest that breaks the shape, a
-/// dependency that does not exist and a cycle; each module then migrates alone on an empty encrypted database, its
-/// tables carry its prefix and none of them points at another module's. The dictionary joins with ERP-2 and the
-/// capabilities with ERP-1.
+/// dependency that does not exist, a cycle and a catalog that breaks the dictionary, such as a field without a class
+/// (ERP-2); each module then migrates alone on an empty encrypted database, its tables carry its prefix and none of
+/// them points at another module's. The capabilities join with ERP-1.
 #[test]
 fn every_registered_module_conforms() {
     let modules = kernel::Modules::discover().unwrap_or_else(|errors| panic!("{errors:#?}"));

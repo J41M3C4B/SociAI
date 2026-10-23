@@ -2,6 +2,7 @@
 //! the module.
 
 use crate::access::Permission;
+use crate::dictionary::Entity;
 
 #[derive(Debug)]
 pub struct Manifest {
@@ -17,6 +18,8 @@ pub struct Manifest {
     pub permissions: &'static [Permission],
     /// Its migrations, numbered inside the module from 1, in order. Once applied, a migration is never edited.
     pub migrations: &'static [Migration],
+    /// Its part of the data dictionary (K3): its entities and their fields, each with its class.
+    pub entities: &'static [Entity],
     /// Whether the program has it on. A module that depends on one that is off is off too.
     pub on: bool,
 }

@@ -321,43 +321,8 @@ pub fn problem(f: &FieldSpec, v: &Value) -> Option<&'static str> {
     }
 }
 
-/// `YYYY-MM-DD`, a day that exists.
-pub fn is_date(s: &str) -> bool {
-    let b = s.as_bytes();
-    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
-        return false;
-    }
-    let num = |r: std::ops::Range<usize>| s.get(r).filter(|x| x.bytes().all(|c| c.is_ascii_digit())).and_then(|x| x.parse::<u32>().ok());
-    let (Some(y), Some(m), Some(d)) = (num(0..4), num(5..7), num(8..10)) else { return false };
-    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let days = match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
-        2 => 28,
-        _ => return false,
-    };
-    y >= 1800 && (1..=days).contains(&d)
-}
-
-/// The name of a place: letters (accents and Ñ too), spaces, periods, hyphens and apostrophes, up to 80.
-pub fn is_place_name(s: &str) -> bool {
-    let s = s.trim();
-    !s.is_empty() && s.chars().count() <= 80 && s.chars().all(|c| c.is_alphabetic() || matches!(c, ' ' | '.' | '-' | '\'' | '’'))
-}
-
-pub fn is_postal_code(s: &str) -> bool {
-    s.len() == 5 && s.bytes().all(|c| c.is_ascii_digit())
-}
-
-/// Three letters (Ñ and & count), the date `YYMMDD` and a check of three letters or digits. Upper or lower case.
-pub fn is_rfc_moral(s: &str) -> bool {
-    let c: Vec<char> = s.to_uppercase().chars().collect();
-    c.len() == 12
-        && c[..3].iter().all(|x| x.is_ascii_uppercase() || *x == 'Ñ' || *x == '&')
-        && is_date(&format!("20{}-{}-{}", c[3..5].iter().collect::<String>(), c[5..7].iter().collect::<String>(), c[7..9].iter().collect::<String>()))
-        && c[9..].iter().all(|x| x.is_ascii_uppercase() || x.is_ascii_digit())
-}
+// the checks of a text live in the kernel, with the dictionary that will replace this description (ERP-2, ERP-1)
+pub use kernel::{is_date, is_place_name, is_postal_code, is_rfc_moral};
 
 #[cfg(test)]
 mod tests {
@@ -448,30 +413,6 @@ mod tests {
         let bad = values(json!({ "name": "Casa", "kinds": ["a"], "zip": "0670", "rfc": "ABC0102031", "since": "2023-02-29" }));
         let codes: Vec<_> = FORM.validate(&bad).into_iter().map(|i| (i.field, i.code)).collect();
         assert_eq!(codes, vec![("zip", "postal_code_invalid"), ("rfc", "rfc_moral_invalid"), ("since", "date_invalid")]);
-    }
-
-    #[test]
-    fn dates_postal_codes_and_rfc_of_an_organization() {
-        for good in ["2026-10-09", "2000-02-29", "1800-01-01"] {
-            assert!(is_date(good), "{good}");
-        }
-        for bad in ["2026-13-01", "2026-04-31", "1900-02-29", "26-10-09", "2026/10/09", "2026-1-09", "1799-12-31", ""] {
-            assert!(!is_date(bad), "{bad}");
-        }
-        assert!(is_postal_code("01000") && !is_postal_code("1000") && !is_postal_code("0100A") && !is_postal_code("010000"));
-        for place in ["Benito Juárez", "San Pedro Tlaquepaque", "Dolores Hidalgo Cuna de la Independencia Nacional", "Peñón Blanco", "Gral. Escobedo", "Bahía de Banderas"] {
-            assert!(is_place_name(place), "{place}");
-        }
-        for not_a_place in ["", "   ", "Zapopan 45010", "contacto@casa.org", "Llamar al 55 1234 5678", &"a".repeat(81)] {
-            assert!(!is_place_name(not_a_place), "{not_a_place}");
-        }
-        for good in ["ABC010203XY9", "AÑ&991231AB1", "abc010203xy9"] {
-            assert!(is_rfc_moral(good), "{good}");
-        }
-        // a person's RFC has 13 characters; a wrong date or a sign does not pass
-        for bad in ["ABCD010203XY9", "ABC011303XY9", "AB1010203XY9", "ABC010203XY-", ""] {
-            assert!(!is_rfc_moral(bad), "{bad}");
-        }
     }
 
     #[test]
