@@ -75,18 +75,29 @@ impl Limits {
 
 /// What a capability receives when it runs. Only the platform makes one (`Call::new`); the modules only read it, so
 /// a new field never touches their code.
+///
+/// Reading and preparing get it shared (`&Call`); only applying gets it exclusive (`&mut Call`), because the kernel
+/// applies a change in a transaction of its own (`kernel::apply`, ERP-9).
 pub struct Call<'a> {
     /// The database, open and unlocked.
-    pub conn: &'a Connection,
-    /// The id of the account that asks.
+    pub conn: &'a mut Connection,
+    /// The id of the account that asks: when applying, the one that approved.
     pub by: &'a str,
     /// The id of the task this run belongs to: it goes with everything the run leaves behind.
     pub task: &'a str,
+    /// Only when applying a change: the fingerprint of the proposal the person approved (`proposal.fingerprint`),
+    /// or the one just prepared when the change needs no approval. The kernel applies only that.
+    pub fingerprint: Option<&'a str>,
 }
 
 impl<'a> Call<'a> {
-    pub fn new(conn: &'a Connection, by: &'a str, task: &'a str) -> Self {
-        Call { conn, by, task }
+    pub fn new(conn: &'a mut Connection, by: &'a str, task: &'a str) -> Self {
+        Call { conn, by, task, fingerprint: None }
+    }
+
+    /// The call of an `apply`, tied to the fingerprint of what is applied.
+    pub fn applying(conn: &'a mut Connection, by: &'a str, task: &'a str, fingerprint: &'a str) -> Self {
+        Call { conn, by, task, fingerprint: Some(fingerprint) }
     }
 }
 
@@ -104,12 +115,36 @@ pub enum CapabilityError {
     /// Nothing to correct nor to ask: the task ends with an error.
     #[error("failed: {reason}")]
     Failed { reason: &'static str },
+    /// What was prepared no longer holds (the datum or the input changed, or it no longer passes): the platform
+    /// prepares it again and, when the contract asks for it, the person approves it again.
+    #[error("what was prepared no longer holds: prepare again")]
+    Stale,
 }
 
-/// One function of a capability, over JSON, with the schema of what it gives.
+impl CapabilityError {
+    /// What an `apply` of the kernel answers, by the code of its `kernel::ApplyError`, so every module answers the
+    /// same. The contract sits under the kernel (ADR-003 A2): it reads the code, not the type.
+    pub fn from_apply(code: &'static str) -> CapabilityError {
+        match code {
+            // prepared again, the proposal says what changed, what does not pass or that nothing is left to change
+            "prepare_again" | "invalid" | "nothing_to_change" => CapabilityError::Stale,
+            // `bad_origin`, `bad_fact`, `version_not_raised`, `database`
+            reason => CapabilityError::Failed { reason },
+        }
+    }
+}
+
+/// One function of a capability that reads or prepares, over JSON, with the schema of what it gives.
 #[derive(Clone, Copy)]
 pub struct Step {
     pub call: fn(&Call, Value) -> Result<Value, CapabilityError>,
+    pub output: fn() -> Value,
+}
+
+/// The `apply` of a change, over JSON: the only function that gets the connection exclusive.
+#[derive(Clone, Copy)]
+pub struct Apply {
+    pub call: fn(&mut Call, Value) -> Result<Value, CapabilityError>,
     pub output: fn() -> Value,
 }
 
@@ -119,8 +154,9 @@ pub enum Run {
     /// A query or a transformation.
     Read(Step),
     /// A modification or a sensitive action: `prepare` says what will change without writing, and `apply` makes the
-    /// change with the same input, once it is approved when the contract asks for it.
-    Change { prepare: Step, apply: Step },
+    /// change with the same input, once it is approved when the contract asks for it. The `prepare` of a modification
+    /// gives the kernel's proposal (`kernel::Proposal`), and the platform checks it when the app starts.
+    Change { prepare: Step, apply: Apply },
 }
 
 /// The contract of a capability. A module declares it with `capability!`, never by hand.
@@ -157,10 +193,27 @@ where
     O: Serialize,
     F: Fn(&Call, I) -> Result<O, CapabilityError>,
 {
+    let output = f(call, parse(input)?)?;
+    to_json(output)
+}
+
+#[doc(hidden)]
+pub fn adapt_apply<I, O, F>(call: &mut Call, input: Value, f: F) -> Result<Value, CapabilityError>
+where
+    I: DeserializeOwned,
+    O: Serialize,
+    F: Fn(&mut Call, I) -> Result<O, CapabilityError>,
+{
+    let output = f(call, parse(input)?)?;
+    to_json(output)
+}
+
+fn parse<I: DeserializeOwned>(input: Value) -> Result<I, CapabilityError> {
     // serde's message may quote the value it got: it never leaves here
-    let input = serde_json::from_value(input)
-        .map_err(|_| CapabilityError::Invalid { field: "input", reason: "does not fit the schema of the capability" })?;
-    let output = f(call, input)?;
+    serde_json::from_value(input).map_err(|_| CapabilityError::Invalid { field: "input", reason: "does not fit the schema of the capability" })
+}
+
+fn to_json<O: Serialize>(output: O) -> Result<Value, CapabilityError> {
     serde_json::to_value(output).map_err(|_| CapabilityError::Failed { reason: "the output could not be written as JSON" })
 }
 
@@ -182,11 +235,20 @@ where
     schemars::schema_for!(O).to_value()
 }
 
-/// Only type-checked: `prepare` and `apply` take the same input.
+#[doc(hidden)]
+pub fn apply_output_schema<I, O, F>(_: F) -> Value
+where
+    O: JsonSchema,
+    F: Fn(&mut Call, I) -> Result<O, CapabilityError>,
+{
+    schemars::schema_for!(O).to_value()
+}
+
+/// Only type-checked: `prepare` and `apply` take the same input, and only `apply` gets the call exclusive.
 #[doc(hidden)]
 pub fn same_input<I, P, O, F, G>(_: F, _: G)
 where
     F: Fn(&Call, I) -> Result<P, CapabilityError>,
-    G: Fn(&Call, I) -> Result<O, CapabilityError>,
+    G: Fn(&mut Call, I) -> Result<O, CapabilityError>,
 {
 }

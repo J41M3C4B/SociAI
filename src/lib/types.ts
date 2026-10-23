@@ -850,7 +850,7 @@ export interface RuntimeRequest {
 export type TaskState = "running" | "paused" | "done" | "denied" | "limit" | "error";
 export type OutcomeAsk = { kind: "missing"; what: string } | { kind: "correct"; field: string; reason: string };
 /** Why a proposal is asked for once more. */
-export type OutcomeAgain = "changed" | "outdated";
+export type OutcomeAgain = "changed" | "outdated" | "data_changed";
 /** The way to go on after an error: an error never blocks. */
 export type OutcomeNext = "use_screen" | "ask_administrator" | "start_again" | "check_history" | "try_later";
 export interface OutcomeEvidence {

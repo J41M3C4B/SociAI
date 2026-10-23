@@ -17,7 +17,7 @@ pub mod task;
 #[cfg(test)]
 mod tests;
 
-use capability::{ContractError, Fault, Registry};
+use capability::{ContractError, Effect, Fault, Registry, Run};
 use kernel::Modules;
 
 pub use outcome::Outcome;
@@ -30,10 +30,11 @@ pub struct Who<'a> {
     pub organization: &'a str,
 }
 
-/// The account as it is now, for the kernel to decide on it (K2). The app gives it only while the session is open,
-/// not locked and of this same account; otherwise nothing, and nothing is allowed.
+/// The account as it is now, for the kernel to decide on it (K2), read on the connection the runtime works on. The app
+/// gives it only while the session is open, not locked and of this same account; otherwise nothing, and nothing is
+/// allowed.
 pub trait Accounts {
-    fn now(&self, who: &Who) -> Option<kernel::Account>;
+    fn now(&self, conn: &rusqlite::Connection, who: &Who) -> Option<kernel::Account>;
 }
 
 pub trait Clock {
@@ -88,5 +89,16 @@ pub fn unknown_permissions(registry: &Registry, modules: &Modules) -> Vec<Contra
         .all()
         .filter(|c| modules.permission(c.permission).is_none())
         .map(|c| ContractError { id: c.id, fault: Fault::UnknownPermission })
+        .collect()
+}
+
+/// The modifications whose `prepare` does not give the kernel's proposal (ERP-9): the platform ties the approval to its
+/// fingerprint, so with one the app does not start. The registry sits under the kernel and cannot check it.
+pub fn changes_without_proposal(registry: &Registry) -> Vec<ContractError> {
+    let proposal = schemars::schema_for!(kernel::Proposal).to_value();
+    registry
+        .with_effect(Effect::Modify)
+        .filter(|c| !matches!(c.run, Run::Change { prepare, .. } if (prepare.output)() == proposal))
+        .map(|c| ContractError { id: c.id, fault: Fault::PrepareWithoutProposal })
         .collect()
 }

@@ -31,6 +31,9 @@ pub enum Fault {
     /// Neither the kernel nor any module defines the permission. The registry does not know the catalog of
     /// permissions; the platform checks it against the kernel when the program starts.
     UnknownPermission,
+    /// A modification whose `prepare` does not give the kernel's proposal (`kernel::Proposal`). The registry does not
+    /// know the kernel either; the platform checks it when the program starts.
+    PrepareWithoutProposal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

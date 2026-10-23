@@ -55,6 +55,8 @@ pub enum Again {
     Changed,
     /// The decision was for a proposal that is no longer the one waiting.
     Outdated,
+    /// The datum changed after it was approved: prepared again, it shows the datum as it is now.
+    DataChanged,
 }
 
 /// The way to go on after an error (PAIR: an error never blocks).

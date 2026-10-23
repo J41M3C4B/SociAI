@@ -3,9 +3,9 @@
 //! module may use; its tables start with `muestra_`, and only it writes SQL on them.
 //!
 //! It grows with the kernel: ERP-9 prepares and applies its changes, and ERP-2 declares its part of the dictionary,
-//! with which the kernel validates a note and protects its phone. Its first capability came with IA-5, a query with
-//! a permission of its own; IA-7 adds the one that changes a note through the kernel, and ERP-1 adds them to the
-//! conformance test.
+//! with which the kernel validates a note and protects its phone. Its capabilities have permissions of its own: a
+//! query came with IA-5, and the change of a note through the kernel with IA-7. ERP-1 adds them to the conformance
+//! test.
 
 pub mod capabilities;
 pub mod catalog;
