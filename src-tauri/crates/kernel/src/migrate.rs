@@ -74,6 +74,7 @@ mod tests {
             Migration { version: 1, sql: "CREATE TABLE notas_note (id TEXT PRIMARY KEY);" },
             Migration { version: 2, sql: "ALTER TABLE notas_note ADD COLUMN title TEXT;" },
         ],
+        entities: &[],
         on: true,
     };
     static NOTES: Manifest = BASE;

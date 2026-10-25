@@ -27,6 +27,10 @@ pub const GENERAL: &[Permission] = &[
 /// ones come with the ADR of IA-3.
 pub const CLASSES: &[&str] = &["public", "internal", "confidential", "personal", "sensitive_personal"];
 
+/// The classes whose values the history keeps. A field of any other class is protected: its history says it changed,
+/// never its value (K5).
+pub const KEPT_IN_HISTORY: &[&str] = &["public", "internal"];
+
 /// What a role may do or see: all of it, or only these ids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -158,6 +162,7 @@ mod tests {
         depends_on: &[],
         permissions: &[Permission { id: "contabilidad.polizas.registrar", description: "Registrar pólizas." }],
         migrations: &[],
+        entities: &[],
         on: true,
     };
 

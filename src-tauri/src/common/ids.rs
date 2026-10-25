@@ -88,15 +88,8 @@ pub fn nss_is_valid(s: &str) -> bool {
     (10 - sum % 10) % 10 == d[10]
 }
 
-/// The CLABE of a bank account: eighteen digits, the last one weighted 3-7-1 over the first seventeen.
-pub fn clabe_is_valid(s: &str) -> bool {
-    let d: Vec<u32> = clean(s).chars().filter_map(|c| c.to_digit(10)).collect();
-    if d.len() != 18 || clean(s).len() != 18 {
-        return false;
-    }
-    let sum: u32 = d[..17].iter().enumerate().map(|(i, &x)| (x * [3, 7, 1][i % 3]) % 10).sum();
-    (10 - sum % 10) % 10 == d[17]
-}
+/// The CLABE of a bank account: eighteen digits and their check digit. The kernel's, which the dictionary uses.
+pub use kernel::clabe_is_valid;
 
 /// The bank of a CLABE, by its first three digits (the most common ones).
 pub fn bank_of_clabe(s: &str) -> Option<&'static str> {

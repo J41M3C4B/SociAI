@@ -1,8 +1,9 @@
 //! A change of data, prepared and then applied (the ERP blueprint §7), for any entity of any module. A person who saves
 //! a form and a task of the platform that proposes values go the same way:
 //!
-//! 1. **prepare**: the module reads the entity as it is and the kernel turns that into a `Proposal`: the differences
-//!    field by field, what does not pass the validation, the base version and the fingerprint. Nothing is written.
+//! 1. **prepare**: the module reads the entity as it is and the kernel turns that into a `Proposal` with the entity's
+//!    dictionary (K3): the differences field by field, which of them are protected, what does not pass the
+//!    validation, the base version and the fingerprint. Nothing is written.
 //! 2. **approve**, when the contract asks for it: the approval is tied to the fingerprint.
 //! 3. **apply**: in one transaction (K4) the kernel prepares again, and applies only if the fingerprint is still the
 //!    approved one; then the module writes its datum and raises its version, and the kernel writes the record of the
@@ -20,6 +21,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::audit::{is_code, is_id};
+use crate::dictionary::{Entity, Field};
 
 /// Any entity of any module: `muestra` · `note` · its id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -122,32 +124,41 @@ pub struct Proposal {
 }
 
 /// What a module says to prepare a change: the entity, its version and its fields as they are (none if it is new),
-/// its fields as they would be, which ones are protected, what does not pass, and the input it came from.
+/// its fields as they would be, what breaks its own rules beyond the dictionary, and the input it came from.
 pub struct Draft<'a> {
     pub entity: Ref,
     pub version: i64,
     pub before: Option<Map<String, Value>>,
     pub after: Map<String, Value>,
-    pub protected: &'a [&'a str],
+    /// What only the module can check: a name that is repeated, a sum that has to match another. The dictionary
+    /// checks the rest.
     pub invalid: Vec<Invalid>,
     pub input: &'a Value,
 }
 
-/// The proposal of a draft: only the fields that change, in the order of their names.
-pub fn propose(draft: Draft) -> Proposal {
+/// The proposal of a draft, with the entity's dictionary (the one the module declares in its manifest): only the
+/// fields that change, in the order of their names. A field that does not apply goes empty, and the module writes
+/// what the proposal says. What does not pass is the dictionary's validation and then the module's own; a field is
+/// protected by its class, and one the dictionary does not have is protected too.
+pub fn propose(dictionary: &Entity, draft: Draft) -> Proposal {
     let before = draft.before.unwrap_or_default();
-    let mut fields: Vec<&String> = before.keys().chain(draft.after.keys()).collect();
+    let mut after = draft.after;
+    dictionary.clear_hidden(&mut after);
+    let mut invalid = dictionary.validate(&after);
+    invalid.extend(draft.invalid);
+    let mut fields: Vec<&String> = before.keys().chain(after.keys()).collect();
     fields.sort();
     fields.dedup();
     let changes = fields
         .into_iter()
         .filter_map(|f| {
-            let (b, a) = (before.get(f).cloned().unwrap_or(Value::Null), draft.after.get(f).cloned().unwrap_or(Value::Null));
-            (b != a).then(|| FieldChange { field: f.clone(), before: b, after: a, protected: draft.protected.contains(&f.as_str()) })
+            let (b, a) = (before.get(f).cloned().unwrap_or(Value::Null), after.get(f).cloned().unwrap_or(Value::Null));
+            let protected = dictionary.field(f).is_none_or(Field::protected);
+            (b != a).then(|| FieldChange { field: f.clone(), before: b, after: a, protected })
         })
         .collect();
     let fingerprint = fingerprint(&draft.entity, draft.version, draft.input);
-    Proposal { entity: draft.entity, base_version: draft.version, changes, invalid: draft.invalid, fingerprint }
+    Proposal { entity: draft.entity, base_version: draft.version, changes, invalid, fingerprint }
 }
 
 /// Where a change comes from: the evidence the person sees in the history. Only ids and codes.
@@ -380,7 +391,18 @@ pub fn history(conn: &Connection, entity: &Ref) -> rusqlite::Result<Vec<Record>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dictionary::{Condition, Kind};
     use serde_json::json;
+
+    const NOTE: Entity = Entity {
+        id: "note",
+        fields: &[
+            Field::new("title", Kind::Text, "internal").mandatory().max_len(120),
+            Field::new("body", Kind::LongText, "internal"),
+            Field::new("phone", Kind::Phone, "personal"),
+            Field::new("urgent", Kind::YesNo, "internal").when(Condition::Filled { field: "phone" }),
+        ],
+    };
 
     fn map(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
@@ -401,15 +423,17 @@ mod tests {
     #[test]
     fn a_proposal_has_only_what_changes() {
         let input = json!({ "title": "Nuevo" });
-        let p = propose(Draft {
-            entity: Ref::new("muestra", "note", "nota_1"),
-            version: 2,
-            before: Some(map(json!({ "title": "Viejo", "body": "igual", "phone": "55 1234 5678" }))),
-            after: map(json!({ "title": "Nuevo", "body": "igual", "phone": "55 0000 0000" })),
-            protected: &["phone"],
-            invalid: vec![],
-            input: &input,
-        });
+        let p = propose(
+            &NOTE,
+            Draft {
+                entity: Ref::new("muestra", "note", "nota_1"),
+                version: 2,
+                before: Some(map(json!({ "title": "Viejo", "body": "igual", "phone": "55 1234 5678" }))),
+                after: map(json!({ "title": "Nuevo", "body": "igual", "phone": "55 0000 0000" })),
+                invalid: vec![],
+                input: &input,
+            },
+        );
         assert_eq!(
             p.changes,
             [
@@ -419,31 +443,52 @@ mod tests {
         );
         assert_eq!((p.base_version, p.fingerprint.as_str()), (2, fingerprint(&p.entity, 2, &input).as_str()));
         // a new entity: everything comes from nothing
-        let new = propose(Draft {
-            entity: p.entity.clone(),
-            version: 0,
-            before: None,
-            after: map(json!({ "title": "Nuevo" })),
-            protected: &[],
-            invalid: vec![],
-            input: &input,
-        });
+        let new = propose(
+            &NOTE,
+            Draft { entity: p.entity.clone(), version: 0, before: None, after: map(json!({ "title": "Nuevo" })), invalid: vec![], input: &input },
+        );
         assert_eq!(new.changes, [FieldChange { field: "title".into(), before: Value::Null, after: json!("Nuevo"), protected: false }]);
+    }
+
+    /// The module does not repeat what the dictionary says: the validation, what is protected and what is not kept.
+    #[test]
+    fn a_proposal_takes_its_validation_and_its_protection_from_the_dictionary() {
+        let input = json!({});
+        let draft = |after: Value, invalid: Vec<Invalid>| Draft {
+            entity: Ref::new("muestra", "note", "nota_1"),
+            version: 1,
+            before: Some(map(json!({ "title": "Viejo", "phone": "55 1234 5678", "urgent": true }))),
+            after: map(after),
+            invalid,
+            input: &input,
+        };
+        let p = propose(&NOTE, draft(json!({ "title": " ", "phone": "llámale a Rosa", "urgent": true, "color": "rojo" }), vec![Invalid::new("title", "repeated")]));
+        let reasons: Vec<(&str, &str)> = p.invalid.iter().map(|i| (i.field.as_str(), i.reason.as_str())).collect();
+        assert_eq!(reasons, [("title", "required"), ("phone", "not_a_phone"), ("color", "unknown_field"), ("title", "repeated")]);
+        let protected: Vec<(&str, bool)> = p.changes.iter().map(|c| (c.field.as_str(), c.protected)).collect();
+        assert_eq!(protected, [("color", true), ("phone", true), ("title", false)], "a field the dictionary does not have is protected");
+        // without a phone, `urgent` no longer applies: it is not kept
+        let p = propose(&NOTE, draft(json!({ "title": "Viejo", "phone": null, "urgent": true }), vec![]));
+        let changed: Vec<(&str, Value)> = p.changes.iter().map(|c| (c.field.as_str(), c.after.clone())).collect();
+        assert_eq!(changed, [("phone", Value::Null), ("urgent", Value::Null)]);
+        assert!(p.invalid.is_empty());
     }
 
     /// The platform checks the output of `prepare` against the schema of the proposal and reads the fingerprint from it.
     #[test]
     fn a_proposal_has_a_schema_and_goes_and_comes_back_as_json() {
         let input = json!({ "title": "Nuevo" });
-        let p = propose(Draft {
-            entity: Ref::new("muestra", "note", "nota_1"),
-            version: 1,
-            before: Some(map(json!({ "title": "Viejo" }))),
-            after: map(json!({ "title": "Nuevo" })),
-            protected: &[],
-            invalid: vec![Invalid::new("title", "too_long")],
-            input: &input,
-        });
+        let p = propose(
+            &NOTE,
+            Draft {
+                entity: Ref::new("muestra", "note", "nota_1"),
+                version: 1,
+                before: Some(map(json!({ "title": "Viejo" }))),
+                after: map(json!({ "title": "Nuevo" })),
+                invalid: vec![Invalid::new("title", "too_long")],
+                input: &input,
+            },
+        );
         let back: Proposal = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
         assert_eq!(back, p);
         let schema = serde_json::to_value(schemars::schema_for!(Proposal)).unwrap();

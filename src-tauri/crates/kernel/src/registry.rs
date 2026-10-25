@@ -5,6 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::access::CLASSES;
+use crate::dictionary::{Condition, Entity, Field, Kind};
 use crate::module::Manifest;
 
 /// Where `module!` puts each manifest.
@@ -36,6 +38,31 @@ pub enum Fault {
     RepeatedPermission(&'static str),
     /// Its migrations are not numbered 1, 2, 3… in order, or one has no SQL.
     MigrationsOutOfOrder,
+    /// An entity of its catalog whose id is not lowercase letters, digits and `_`.
+    BadEntity(&'static str),
+    /// The same entity twice.
+    RepeatedEntity(&'static str),
+    /// A field of its catalog breaks a rule of the dictionary.
+    Field { entity: &'static str, field: &'static str, fault: FieldFault },
+}
+
+/// A rule of the dictionary (K3) that a field breaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldFault {
+    /// Not lowercase letters, digits and `_`, starting with a letter.
+    BadId,
+    /// The same field twice in its entity.
+    Repeated,
+    /// It has no class: every datum declares one.
+    NoClass,
+    /// Its class is none of `kernel::CLASSES`.
+    UnknownClass,
+    /// A select or a multi-select without options, or options on a field of another kind.
+    Options,
+    /// A range whose least is above its most.
+    BadRange,
+    /// Its condition looks at a field the entity does not have, or at itself, or waits for no value.
+    BadCondition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +147,19 @@ impl Modules {
     pub fn permission(&self, id: &str) -> Option<&'static crate::Permission> {
         self.permissions().find(|p| p.id == id)
     }
+
+    /// The entity of the dictionary this module declares with this id.
+    pub fn entity(&self, module: &str, entity: &str) -> Option<&'static Entity> {
+        self.get(module)?.entities.iter().find(|e| e.id == entity)
+    }
+
+    /// The field of the dictionary with this full id: `module.entity.field` (`muestra.note.phone`). With it the
+    /// policy and the output of a capability take the class of a datum from where it is declared (ADR-003 A5).
+    pub fn field(&self, id: &str) -> Option<&'static Field> {
+        let mut parts = id.split('.');
+        let (Some(module), Some(entity), Some(field), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else { return None };
+        self.entity(module, entity)?.field(field)
+    }
 }
 
 /// The rules one manifest breaks by itself.
@@ -150,6 +190,47 @@ fn faults(m: &'static Manifest) -> Vec<Fault> {
     let numbered = m.migrations.iter().enumerate().all(|(i, mig)| mig.version == i as i64 + 1 && !mig.sql.trim().is_empty());
     if !numbered {
         out.push(Fault::MigrationsOutOfOrder);
+    }
+    let mut entities = BTreeSet::new();
+    for e in m.entities {
+        out.extend(field_faults(e).into_iter().map(|(field, fault)| Fault::Field { entity: e.id, field, fault }));
+        if !well_formed(e.id) {
+            out.push(Fault::BadEntity(e.id));
+        }
+        if !entities.insert(e.id) {
+            out.push(Fault::RepeatedEntity(e.id));
+        }
+    }
+    out
+}
+
+/// The rules of the dictionary the fields of one entity break.
+fn field_faults(e: &Entity) -> Vec<(&'static str, FieldFault)> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for f in e.fields {
+        let mut fault = |x| out.push((f.id, x));
+        if !well_formed(f.id) {
+            fault(FieldFault::BadId);
+        }
+        if !seen.insert(f.id) {
+            fault(FieldFault::Repeated);
+        }
+        if f.class.trim().is_empty() {
+            fault(FieldFault::NoClass);
+        } else if !CLASSES.contains(&f.class) {
+            fault(FieldFault::UnknownClass);
+        }
+        if matches!(f.kind, Kind::Select | Kind::MultiSelect) == f.options.is_empty() {
+            fault(FieldFault::Options);
+        }
+        if f.min.zip(f.max).is_some_and(|(min, max)| min > max) {
+            fault(FieldFault::BadRange);
+        }
+        let looks_wrong = f.applies_when.field().is_some_and(|other| other == f.id || e.field(other).is_none());
+        if looks_wrong || matches!(f.applies_when, Condition::AnyOf { values: &[], .. }) {
+            fault(FieldFault::BadCondition);
+        }
     }
     out
 }
@@ -195,10 +276,11 @@ fn in_cycle(by_id: &BTreeMap<&'static str, &'static Manifest>, stuck: &BTreeSet<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dictionary::{Condition, Entity, Field, Kind};
     use crate::{Migration, Permission};
 
     const fn manifest(id: &'static str, depends_on: &'static [&'static str], on: bool) -> Manifest {
-        Manifest { id, name: "Módulo", version: "0.1.0", depends_on, permissions: &[], migrations: &[], on }
+        Manifest { id, name: "Módulo", version: "0.1.0", depends_on, permissions: &[], migrations: &[], entities: &[], on }
     }
 
     fn faults_of(manifests: &'static [Manifest]) -> Vec<(&'static str, Fault)> {
@@ -308,6 +390,66 @@ mod tests {
         // a module that is off still defines its permissions: turning it on does not change the catalog
         assert_eq!(modules.permission("donantes.recibos.emitir").map(|p| p.description), Some("Emitir recibos."));
         assert!(modules.permission("donantes.recibos.borrar").is_none());
+    }
+
+    #[test]
+    fn a_catalog_that_breaks_the_dictionary_says_what_it_breaks() {
+        static ALL: [Manifest; 1] = [Manifest {
+            entities: &[
+                Entity {
+                    id: "donor",
+                    fields: &[
+                        Field::new("name", Kind::Text, "personal"),
+                        Field::new("name", Kind::Text, "personal"),
+                        Field::new("Nombre", Kind::Text, "personal"),
+                        Field::new("rfc", Kind::Text, ""),
+                        Field::new("phone", Kind::Phone, "secreto"),
+                        Field::new("kind", Kind::Select, "internal"),
+                        Field::new("since", Kind::Year, "internal").options(&["a"]),
+                        Field::new("amount", Kind::Money, "internal").range(10, 1),
+                        Field::new("cause", Kind::Text, "internal").when(Condition::Filled { field: "color" }),
+                        Field::new("again", Kind::Text, "internal").when(Condition::Filled { field: "again" }),
+                        Field::new("which", Kind::Text, "internal").when(Condition::AnyOf { field: "name", values: &[] }),
+                    ],
+                },
+                Entity { id: "Donativo", fields: &[] },
+                Entity { id: "donor", fields: &[] },
+            ],
+            ..manifest("donantes", &[], true)
+        }];
+        let field = |field, fault| ("donantes", Fault::Field { entity: "donor", field, fault });
+        assert_eq!(
+            faults_of(&ALL),
+            [
+                field("name", FieldFault::Repeated),
+                field("Nombre", FieldFault::BadId),
+                field("rfc", FieldFault::NoClass),
+                field("phone", FieldFault::UnknownClass),
+                field("kind", FieldFault::Options),
+                field("since", FieldFault::Options),
+                field("amount", FieldFault::BadRange),
+                field("cause", FieldFault::BadCondition),
+                field("again", FieldFault::BadCondition),
+                field("which", FieldFault::BadCondition),
+                ("donantes", Fault::BadEntity("Donativo")),
+                ("donantes", Fault::RepeatedEntity("donor")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_field_is_found_by_its_full_id_with_its_class() {
+        static ALL: [Manifest; 1] = [Manifest {
+            entities: &[Entity { id: "donor", fields: &[Field::new("name", Kind::Text, "personal"), Field::new("since", Kind::Year, "internal")] }],
+            ..manifest("donantes", &[], true)
+        }];
+        let modules = Modules::of(&ALL).unwrap();
+        assert_eq!(modules.entity("donantes", "donor").map(|e| e.fields.len()), Some(2));
+        assert_eq!(modules.field("donantes.donor.name").map(|f| f.class), Some("personal"));
+        assert_eq!(modules.field("donantes.donor.since").map(|f| f.class), Some("internal"));
+        for unknown in ["donantes.donor.color", "donantes.gift.name", "proyectos.donor.name", "donantes.donor", "donantes.donor.name.x", ""] {
+            assert!(modules.field(unknown).is_none(), "{unknown}");
+        }
     }
 
     #[test]

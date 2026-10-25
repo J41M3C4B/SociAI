@@ -1,18 +1,17 @@
 //! Saving a note, prepared and then applied on the kernel (ERP-9): the same path a person and a task of the platform
-//! take. The validation is the module's own until the dictionary (ERP-2) does it for every entity.
+//! take. The kernel validates it and protects its phone with the module's part of the dictionary (ERP-2): nothing of
+//! that is written here.
 
-use kernel::{Applied, ApplyError, Changeable, Draft, Invalid, Origin, Proposal, Ref};
+use kernel::{Applied, ApplyError, Changeable, Draft, Origin, Proposal, Ref};
 use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 
+use crate::catalog::NOTE;
 use crate::contract::{NoteInput, NoteRef};
 use crate::storage;
 
 /// What happened, for whoever reacts to it.
 pub const NOTE_SAVED: &str = "muestra.nota_guardada";
-
-/// The fields of a note the person never sees in the history.
-const PROTECTED: &[&str] = &["phone"];
 
 pub fn note_ref(id: &str) -> Ref {
     Ref::new("muestra", "note", id)
@@ -29,36 +28,22 @@ fn fields(title: &str, body: &Option<String>, phone: &Option<String>) -> Map<Str
     m
 }
 
-fn invalid(input: &NoteInput) -> Vec<Invalid> {
-    let mut out = Vec::new();
-    if input.title.trim().is_empty() {
-        out.push(Invalid::new("title", "required"));
-    } else if input.title.chars().count() > 120 {
-        out.push(Invalid::new("title", "too_long"));
-    }
-    let phone_ok = |p: &String| {
-        p.chars().all(|c| c.is_ascii_digit() || matches!(c, ' ' | '+' | '-')) && p.chars().filter(char::is_ascii_digit).count() >= 8
-    };
-    if input.phone.as_ref().is_some_and(|p| !phone_ok(p)) {
-        out.push(Invalid::new("phone", "not_a_phone"));
-    }
-    out
-}
-
 impl Changeable for SaveNote<'_> {
     fn prepare(&self, conn: &Connection) -> rusqlite::Result<Proposal> {
         let input = self.0;
         let now = storage::find(conn, &NoteRef(input.id.clone()))?;
         let as_json = serde_json::to_value(input).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        Ok(kernel::propose(Draft {
-            entity: note_ref(&input.id),
-            version: now.as_ref().map_or(0, |n| n.version),
-            before: now.as_ref().map(|n| fields(&n.title, &n.body, &n.phone)),
-            after: fields(&input.title, &input.body, &input.phone),
-            protected: PROTECTED,
-            invalid: invalid(input),
-            input: &as_json,
-        }))
+        Ok(kernel::propose(
+            &NOTE,
+            Draft {
+                entity: note_ref(&input.id),
+                version: now.as_ref().map_or(0, |n| n.version),
+                before: now.as_ref().map(|n| fields(&n.title, &n.body, &n.phone)),
+                after: fields(&input.title, &input.body, &input.phone),
+                invalid: vec![],
+                input: &as_json,
+            },
+        ))
     }
 
     fn version(&self, conn: &Connection) -> rusqlite::Result<i64> {
@@ -83,6 +68,7 @@ pub fn apply(conn: &mut Connection, input: &NoteInput, approved: Option<&str>, o
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kernel::Invalid;
 
     const ROSA: &str = "usr_01JB3M7Q8ZK4X2N6V9R5T0W1YD";
     const TASK: &str = "task_01JB3M7Q8ZK4X2N6V9R5T0W1YC";
@@ -203,6 +189,20 @@ mod tests {
         // the platform did not hear the answer and tries again: nothing is done twice, and it is a success
         assert_eq!(apply(&mut conn, &new, Some(&fp), &person()).unwrap(), earlier);
         assert_eq!(traces(&conn), [1, 1, 1, 1]);
+    }
+
+    /// The kernel knows the note by the module's part of the dictionary: its classes, what does not pass and what is
+    /// missing, with no code of the module.
+    #[test]
+    fn the_kernel_knows_the_note_by_its_dictionary() {
+        let modules = kernel::Modules::discover().unwrap();
+        assert_eq!(modules.field("muestra.note.phone").map(|f| (f.class, f.protected())), Some(("personal", true)));
+        assert_eq!(modules.field("muestra.note.title").map(|f| (f.class, f.protected())), Some(("internal", false)));
+        let long = prepare(&db(), &input(&kernel::new_id("nota"), &"a".repeat(121))).unwrap();
+        assert_eq!(long.invalid, [Invalid::new("title", "too_long")]);
+        let note = modules.entity("muestra", "note").unwrap();
+        assert_eq!(note.missing(&fields(" ", &None, &None)), ["title"]);
+        assert!(note.missing(&fields("Primera", &None, &None)).is_empty());
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! The part of the conformance test that needs a database (the ERP blueprint §4), for any owner of tables: a module,
 //! or the AI platform (ADR-003 A3). Its migrations are numbered 1, 2, 3… and apply on a database with nothing,
 //! everything they make carries its prefix, and none of its tables points at a table of another owner (the kernel's
-//! may be pointed at). The rest of the rules of a module's manifest (its id, its dependencies, its permissions) are
-//! the registry's. The dictionary and the capabilities join the test with ERP-2 and ERP-1.
+//! may be pointed at). The rest of the rules of a module's manifest (its id, its dependencies, its permissions and
+//! its part of the dictionary, where every field has a class) are the registry's. The capabilities join with ERP-1.
 
 use std::fmt;
 
