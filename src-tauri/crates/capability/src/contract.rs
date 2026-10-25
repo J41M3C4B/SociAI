@@ -48,6 +48,19 @@ pub enum DataClass {
     SensitivePersonal,
 }
 
+impl DataClass {
+    /// Its id, the one the data dictionary gives a field (`kernel::CLASSES`).
+    pub fn id(self) -> &'static str {
+        match self {
+            DataClass::Public => "public",
+            DataClass::Internal => "internal",
+            DataClass::Confidential => "confidential",
+            DataClass::Personal => "personal",
+            DataClass::SensitivePersonal => "sensitive_personal",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Approval {
@@ -103,15 +116,17 @@ impl<'a> Call<'a> {
 
 /// Why a run did not give its output, which says what to do next (blueprints §3.2). The texts are fixed, so a datum
 /// of a person can never travel inside an error, nor from there into the audit log.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CapabilityError {
     /// An argument that can be corrected: the run may be tried again with a corrected input.
     #[error("invalid {field}: {reason}")]
     Invalid { field: &'static str, reason: &'static str },
-    /// Something only the person knows is missing: the task pauses and asks.
-    #[error("needs from the person: {what}")]
-    NeedsPerson { what: &'static str },
+    /// Something only the person knows is missing: the task pauses and asks for these fields of the dictionary (K3),
+    /// with their kind and options. `entity` is its id in the dictionary (`muestra.note`) and `fields` the ids of
+    /// its fields, as `kernel::Entity::missing` gives them. The answer joins the input under those same ids.
+    #[error("needs from the person: {fields:?} of {entity}")]
+    NeedsPerson { entity: &'static str, fields: Vec<&'static str> },
     /// Nothing to correct nor to ask: the task ends with an error.
     #[error("failed: {reason}")]
     Failed { reason: &'static str },
@@ -122,6 +137,11 @@ pub enum CapabilityError {
 }
 
 impl CapabilityError {
+    /// Something of the person is missing: these fields of this entity of the dictionary.
+    pub fn needs(entity: &'static str, fields: impl IntoIterator<Item = &'static str>) -> CapabilityError {
+        CapabilityError::NeedsPerson { entity, fields: fields.into_iter().collect() }
+    }
+
     /// What an `apply` of the kernel answers, by the code of its `kernel::ApplyError`, so every module answers the
     /// same. The contract sits under the kernel (ADR-003 A2): it reads the code, not the type.
     pub fn from_apply(code: &'static str) -> CapabilityError {

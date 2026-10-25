@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use super::outcome::{Again, Ask, Body, Next, Outcome};
+use super::outcome::{Again, Ask, Asked, Body, Next, Outcome};
 use super::request::{Channel, Content, Request};
 use super::task::{Limits, Phase, Reached, Task, TaskState};
 use super::*;
@@ -11,14 +11,41 @@ use capability::Registry;
 use kernel::Modules;
 
 /// A module as any other would be, with the capabilities the tests need. It keeps a name in a table of its own, and
-/// changes it on the kernel (ERP-9), like every module, and its part of the dictionary (K3) checks the name.
+/// changes it on the kernel (ERP-9), like every module. Its part of the dictionary (K3) says what it asks of the
+/// person and what its outputs name.
 pub mod trial {
     use capability::{Call, CapabilityError, Limits};
-    use kernel::{Applied, Changeable, Draft, Entity, Field, Kind, Origin, Proposal, Ref};
+    use kernel::{Applied, Changeable, Draft, Entity, Field, Kind, Manifest, Origin, Proposal, Ref};
     use rusqlite::Connection;
     use serde_json::{json, Map, Value};
 
-    pub const NAME: Entity = Entity { id: "name", fields: &[Field::new("name", Kind::Text, "public").mandatory().max_len(40)] };
+    pub const NAME: Entity = Entity {
+        id: "name",
+        fields: &[Field::new("name", Kind::Text, "public").mandatory().max_len(40), Field::new("why", Kind::Text, "public")],
+    };
+
+    pub const CONTACT: Entity = Entity {
+        id: "contact",
+        fields: &[
+            Field::new("phone", Kind::Phone, "personal").expected(),
+            Field::new("kind", Kind::Select, "internal").options(&["casa", "oficina"]).expected(),
+        ],
+    };
+
+    pub const COUNTER: Entity = Entity { id: "counter", fields: &[Field::new("n", Kind::Number, "internal")] };
+
+    kernel::module! {
+        static MANIFEST = Manifest {
+            id: "trial",
+            name: "Prueba",
+            version: "0.1.0",
+            depends_on: &[],
+            permissions: &[],
+            migrations: &[],
+            entities: &[NAME, CONTACT, COUNTER],
+            on: true,
+        };
+    }
 
     #[derive(serde::Deserialize, schemars::JsonSchema)]
     pub struct Nothing {}
@@ -98,7 +125,7 @@ pub mod trial {
 
     pub fn preview(call: &Call, ask: Rename) -> Result<Proposal, CapabilityError> {
         if ask.name.trim().is_empty() {
-            return Err(CapabilityError::NeedsPerson { what: "the new name" });
+            return Err(CapabilityError::needs("trial.name", ["name"]));
         }
         set_name(&ask.name, &ask).prepare(call.conn).map_err(db)
     }
@@ -110,13 +137,144 @@ pub mod trial {
     /// Never has enough until the count reaches 100: a task that does not advance.
     pub fn count(_: &Call, ask: Count) -> Result<Name, CapabilityError> {
         if ask.n < 100 {
-            return Err(CapabilityError::NeedsPerson { what: "a larger count" });
+            return Err(CapabilityError::needs("trial.counter", ["n"]));
         }
         Ok(Name { name: ask.n.to_string() })
     }
 
     pub fn broken(_: &Call, _: Nothing) -> Result<Name, CapabilityError> {
         Err(CapabilityError::Failed { reason: "always fails" })
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    pub struct Dial {
+        pub phone: Option<String>,
+        pub kind: Option<String>,
+    }
+
+    /// Whom to call: a datum of a person and one of the institution, each naming its field.
+    #[derive(serde::Serialize, schemars::JsonSchema)]
+    pub struct Reached {
+        #[schemars(extend("x-field" = "trial.contact.phone"))]
+        pub phone: String,
+        #[schemars(extend("x-field" = "trial.contact.kind"))]
+        pub kind: String,
+    }
+
+    /// What is missing is the kernel's to say (`Entity::missing`), never this capability's.
+    pub fn dial(_: &Call, dial: Dial) -> Result<Reached, CapabilityError> {
+        let values = serde_json::to_value(&dial).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        let missing = CONTACT.missing(&values);
+        match (dial.phone, dial.kind) {
+            (Some(phone), Some(kind)) if missing.is_empty() => Ok(Reached { phone, kind }),
+            _ => Err(CapabilityError::needs("trial.contact", missing)),
+        }
+    }
+
+    #[derive(serde::Serialize, schemars::JsonSchema)]
+    pub struct Calls {
+        pub calls: Vec<Reached>,
+        pub total: i64,
+    }
+
+    pub fn calls(_: &Call, _: Nothing) -> Result<Calls, CapabilityError> {
+        Ok(Calls { calls: vec![], total: 0 })
+    }
+
+    /// Asks for a datum of a person, though it touches only the institution's.
+    pub fn ask_outside(_: &Call, _: Nothing) -> Result<Name, CapabilityError> {
+        Err(CapabilityError::needs("trial.contact", ["phone"]))
+    }
+
+    /// Asks for a field the dictionary does not have.
+    pub fn ask_unknown(_: &Call, _: Nothing) -> Result<Name, CapabilityError> {
+        Err(CapabilityError::needs("trial.contact", ["color"]))
+    }
+
+    #[derive(serde::Serialize, schemars::JsonSchema)]
+    pub struct Color {
+        #[schemars(extend("x-field" = "trial.contact.color"))]
+        pub color: String,
+    }
+
+    pub fn color(_: &Call, _: Nothing) -> Result<Color, CapabilityError> {
+        Ok(Color { color: "azul".into() })
+    }
+
+    pub fn reached(_: &Call, _: Nothing) -> Result<Reached, CapabilityError> {
+        Ok(Reached { phone: "55 1234 5678".into(), kind: "casa".into() })
+    }
+
+    capability::capability! {
+        static DIAL = "trial.dial" {
+            description: "Da a quién llamar; pide lo que falte.",
+            effect: Query,
+            permission: "kernel.usar",
+            data: [Internal, Personal],
+            approval: Never,
+            limits: Limits::READ,
+            run: read(dial),
+        }
+    }
+
+    capability::capability! {
+        static CALLS = "trial.calls" {
+            description: "Las llamadas, en una lista.",
+            effect: Query,
+            permission: "kernel.usar",
+            data: [Internal, Personal],
+            approval: Never,
+            limits: Limits::READ,
+            run: read(calls),
+        }
+    }
+
+    capability::capability! {
+        static ASK_OUTSIDE = "trial.ask_outside" {
+            description: "Pide un dato de una persona sin declararlo.",
+            effect: Query,
+            permission: "kernel.usar",
+            data: [Internal],
+            approval: Never,
+            limits: Limits::READ,
+            run: read(ask_outside),
+        }
+    }
+
+    capability::capability! {
+        static ASK_UNKNOWN = "trial.ask_unknown" {
+            description: "Pide un campo que el diccionario no tiene.",
+            effect: Query,
+            permission: "kernel.usar",
+            data: [Internal],
+            approval: Never,
+            limits: Limits::READ,
+            run: read(ask_unknown),
+        }
+    }
+
+    capability::capability! {
+        static NAMES_UNKNOWN = "trial.names_unknown" {
+            description: "Su salida nombra un campo que el diccionario no tiene.",
+            effect: Query,
+            permission: "kernel.usar",
+            data: [Internal],
+            approval: Never,
+            limits: Limits::READ,
+            run: read(color),
+        }
+    }
+
+    capability::capability! {
+        static NAMES_OUTSIDE = "trial.names_outside" {
+            description: "Su salida trae un dato de una persona sin declararlo.",
+            effect: Query,
+            permission: "kernel.usar",
+            data: [Internal],
+            approval: Never,
+            limits: Limits::READ,
+            run: read(reached),
+        }
     }
 
     #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -132,7 +290,7 @@ pub mod trial {
     /// Only when it applies does it find that something of the person is missing.
     pub fn rename_why(call: &mut Call, ask: RenameWhy) -> Result<Applied, CapabilityError> {
         if ask.why.is_none() {
-            return Err(CapabilityError::NeedsPerson { what: "why the name changes" });
+            return Err(CapabilityError::needs("trial.name", ["why"]));
         }
         apply(call, set_name(&ask.name, &ask))
     }
@@ -365,6 +523,15 @@ impl World {
         self.submit(&ANA, Some(task), Content::Decision { fingerprint: fingerprint.into(), approve })
     }
 
+    /// What a capability asks of the person, as the dictionary describes it, the first time it asks.
+    fn missing(&self, ids: &[&str]) -> Ask {
+        let fields = ids
+            .iter()
+            .map(|id| Asked { id: (*id).into(), field: serde_json::to_value(self.modules.field(id).unwrap()).unwrap(), reason: None })
+            .collect();
+        Ask::Missing { fields }
+    }
+
     /// How many rows a table has.
     fn count(&self, table: &str) -> i64 {
         self.conn.borrow().query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap()
@@ -518,7 +685,7 @@ fn a_task_that_does_not_advance_is_cut_by_its_steps() {
     let limit = Limits::of(&Channel::Screen { place: String::new() }).steps;
     for n in 2..=limit + 1 {
         assert_eq!(o.state, TaskState::Paused);
-        o = w.answer(&o.task, json!({ "n": n }));
+        o = w.answer(&o.task, json!({ "trial.counter.n": n }));
     }
     assert_eq!(o.state, TaskState::Limit);
     assert_eq!(o.body, Body::Error { code: Reached::Steps.code().into(), next: Next::StartAgain });
@@ -564,9 +731,9 @@ fn an_input_that_does_not_fit_its_contract_never_runs() {
 fn a_pause_runs_out() {
     let w = world();
     let o = w.invoke(None, "trial.rename", json!({ "name": "" }));
-    assert_eq!(o.body, Body::Clarification { capability: "trial.rename".into(), ask: Ask::Missing { what: "the new name".into() } });
+    assert_eq!(o.body, Body::Clarification { capability: "trial.rename".into(), ask: w.missing(&["trial.name.name"]) });
     w.clock.advance(Limits::of(&o.channel).pause_ms + 1);
-    let o = w.answer(&o.task, json!({ "name": "Otra" }));
+    let o = w.answer(&o.task, json!({ "trial.name.name": "Otra" }));
     assert_eq!((o.state, w.task(&o.task).reason), (TaskState::Limit, Some("limit_pause".into())));
     assert_eq!(w.name(), "Casa Hogar");
 }
@@ -863,10 +1030,10 @@ fn what_the_person_adds_to_an_approved_change_is_approved_again() {
     let w = world();
     let asked = w.invoke(None, "trial.rename_why", json!({ "name": "Otra" }));
     let o = w.decide(&asked.task, &fingerprint_of(&asked), true);
-    assert_eq!(o.body, Body::Clarification { capability: "trial.rename_why".into(), ask: Ask::Missing { what: "why the name changes".into() } });
+    assert_eq!(o.body, Body::Clarification { capability: "trial.rename_why".into(), ask: w.missing(&["trial.name.why"]) });
 
     // the answer changes the input: it is prepared and shown again, never applied on the earlier approval
-    let o = w.answer(&asked.task, json!({ "why": "Cambio de razón social" }));
+    let o = w.answer(&asked.task, json!({ "trial.name.why": "Cambio de razón social" }));
     assert!(matches!(&o.body, Body::Proposal { .. }), "{o:?}");
     assert_ne!(fingerprint_of(&o), fingerprint_of(&asked));
     assert_eq!(w.name(), "Casa Hogar");
@@ -884,4 +1051,106 @@ fn a_request_that_changes_nothing_keeps_what_the_task_said_last() {
     assert_eq!(o.body, Body::Error { code: "not_waiting".into(), next: Next::StartAgain });
     let runtime = w.runtime();
     assert_eq!(runtime.task(&w.conn.borrow(), &ANA, &asked.task).unwrap(), Some(asked), "the proposal is still what waits");
+}
+
+/// What is missing comes as fields of the dictionary (K3), with their kind and options, so the person answers with
+/// them and not with free text (the AI blueprint §6).
+#[test]
+fn what_is_missing_is_asked_as_fields_of_the_dictionary() {
+    let w = world();
+    let o = w.invoke(None, "trial.dial", json!({ "kind": "casa" }));
+    assert_eq!(o.state, TaskState::Paused);
+    assert_eq!(o.body, Body::Clarification { capability: "trial.dial".into(), ask: w.missing(&["trial.contact.phone"]) });
+    let o = w.invoke(None, "trial.dial", json!({}));
+    let v = serde_json::to_value(&o).unwrap();
+    assert_eq!(v["body"]["ask"]["kind"], "missing");
+    let fields = &v["body"]["ask"]["fields"];
+    assert_eq!((fields[0]["id"].clone(), fields[0]["field"]["kind"].clone()), (json!("trial.contact.phone"), json!("phone")));
+    assert_eq!((fields[1]["field"]["kind"].clone(), fields[1]["field"]["options"].clone()), (json!("select"), json!(["casa", "oficina"])));
+    assert_eq!(fields[1]["reason"], Value::Null);
+}
+
+/// The kernel checks the answer before the task goes on: what does not pass is asked again with its code and counts
+/// as a correction, and what was not asked never joins the input.
+#[test]
+fn the_kernel_checks_the_answer_before_the_task_goes_on() {
+    let w = world();
+    let asked = w.invoke(None, "trial.dial", json!({}));
+    let o = w.answer(&asked.task, json!({ "trial.contact.phone": "llámale a Rosa", "trial.contact.kind": "cocina" }));
+    assert_eq!(o.state, TaskState::Paused);
+    let Body::Clarification { ask: Ask::Missing { fields }, .. } = &o.body else { panic!("{o:?}") };
+    let reasons: Vec<(&str, Option<&str>)> = fields.iter().map(|f| (f.id.as_str(), f.reason.as_deref())).collect();
+    assert_eq!(reasons, [("trial.contact.phone", Some("not_a_phone")), ("trial.contact.kind", Some("code_unknown"))]);
+    assert_eq!((w.task(&o.task).steps, w.task(&o.task).corrections), (1, 1), "the capability did not run again");
+
+    let answer = json!({ "trial.contact.phone": "55 1234 5678", "trial.contact.kind": "casa", "trial.contact.color": "x", "kind": "oficina" });
+    let o = w.answer(&asked.task, answer);
+    assert_eq!(o.state, TaskState::Done, "{o:?}");
+    assert_eq!(o.body, Body::Data { capability: "trial.dial".into(), value: json!({ "phone": "55 1234 5678", "kind": "casa" }) });
+    // a value of a person never reaches the trail
+    let everything: String = w
+        .conn
+        .borrow()
+        .query_row("SELECT group_concat(quote(event) || quote(subject) || quote(outcome) || quote(reason), ' ') FROM kernel_audit", [], |r| r.get(0))
+        .unwrap();
+    assert!(!everything.contains("Rosa") && !everything.contains("1234"));
+}
+
+#[test]
+fn wrong_answers_have_the_limit_of_corrections() {
+    let w = world();
+    let mut o = w.invoke(None, "trial.dial", json!({ "kind": "casa" }));
+    for i in 1..=3 {
+        o = w.answer(&o.task, json!({ "trial.contact.phone": format!("sin número {i}") }));
+        assert_eq!(o.state, TaskState::Paused, "correction {i}");
+    }
+    let o = w.answer(&o.task, json!({ "trial.contact.phone": "sin número" }));
+    assert_eq!((o.state, w.task(&o.task).reason), (TaskState::Limit, Some("limit_corrections".into())));
+}
+
+/// A capability asks only for fields of the dictionary within its `data`: an input may not carry what the contract
+/// does not declare.
+#[test]
+fn a_capability_asks_only_for_fields_it_may_touch() {
+    let w = world();
+    for capability in ["trial.ask_outside", "trial.ask_unknown"] {
+        let o = w.invoke(None, capability, json!({}));
+        assert_eq!((o.state, o.body.clone()), (TaskState::Error, Body::Error { code: "bad_output".into(), next: Next::TryLater }), "{capability}");
+    }
+}
+
+/// The output of a capability names its fields of the dictionary, and the class of each one comes from there, never
+/// from the capability (ADR-003 A5): what the policy reads, field by field.
+#[test]
+fn the_output_names_its_fields_and_their_class_comes_from_the_dictionary() {
+    let w = world();
+    let of = |id: &str| {
+        let mut fields = output_fields(w.registry.get(id).unwrap(), &w.modules).unwrap();
+        fields.sort_by(|a, b| a.path.cmp(&b.path));
+        fields.into_iter().map(|f| (f.path, f.field, f.class)).collect::<Vec<_>>()
+    };
+    let field = |path: &str, field: &str, class: &'static str| (path.to_string(), field.to_string(), class);
+    assert_eq!(of("trial.dial"), [field("kind", "trial.contact.kind", "internal"), field("phone", "trial.contact.phone", "personal")]);
+    assert_eq!(of("trial.calls"), [field("calls[].kind", "trial.contact.kind", "internal"), field("calls[].phone", "trial.contact.phone", "personal")]);
+    assert_eq!(of("trial.read"), [], "a property that names no field has no class of its own");
+}
+
+/// An output that names a field the dictionary does not have, or one of a class outside its `data`, stops the app
+/// when it starts.
+#[test]
+fn an_output_outside_the_dictionary_is_found_before_starting() {
+    let w = world();
+    let faults: Vec<(&str, Fault)> = outputs_outside_dictionary(&w.registry, &w.modules).iter().map(|e| (e.id, e.fault)).collect();
+    assert_eq!(faults, [("trial.names_outside", Fault::ClassOutsideData), ("trial.names_unknown", Fault::UnknownField)]);
+}
+
+/// The classes of the contract are the ones the kernel gives a field.
+#[test]
+fn a_class_of_the_contract_is_named_as_the_dictionary_names_it() {
+    use capability::DataClass::*;
+    let ids: Vec<&str> = [Public, Internal, Confidential, Personal, SensitivePersonal].iter().map(|c| c.id()).collect();
+    assert_eq!(ids, kernel::CLASSES);
+    for c in [Public, Internal, Confidential, Personal, SensitivePersonal] {
+        assert_eq!(serde_json::to_value(c).unwrap(), json!(c.id()));
+    }
 }

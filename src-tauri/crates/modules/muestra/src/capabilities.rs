@@ -4,6 +4,10 @@
 //!
 //! Saving a note goes through the kernel like any change (ERP-9): `prepare` gives the kernel's proposal, and `apply`
 //! applies only the fingerprint the person approved, with the task as its origin.
+//!
+//! What a capability gives names its fields of the dictionary (`x-field`), so the class of each datum is the one the
+//! catalog declares, never written here again (ADR-003 A5). What it asks of the person is fields of the dictionary
+//! too (IA-8).
 
 use capability::{Call, CapabilityError, Limits};
 use kernel::{Applied, Origin, Proposal};
@@ -21,9 +25,28 @@ pub struct WhichNote {
 #[derive(serde::Serialize, schemars::JsonSchema)]
 pub struct Note {
     pub id: String,
+    #[schemars(extend("x-field" = "muestra.note.title"))]
     pub title: String,
+    #[schemars(extend("x-field" = "muestra.note.body"))]
     pub body: Option<String>,
     pub version: i64,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct WhoToCall {
+    /// The id of the note.
+    pub id: String,
+    /// The phone, when the note has none and the person gives it.
+    pub phone: Option<String>,
+}
+
+/// Whom to call about a note: its title and the phone, a datum of a person.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Contact {
+    #[schemars(extend("x-field" = "muestra.note.title"))]
+    pub title: String,
+    #[schemars(extend("x-field" = "muestra.note.phone"))]
+    pub phone: String,
 }
 
 fn read(call: &Call, which: WhichNote) -> Result<Note, CapabilityError> {
@@ -31,6 +54,18 @@ fn read(call: &Call, which: WhichNote) -> Result<Note, CapabilityError> {
         .map_err(|_| CapabilityError::Failed { reason: "the note could not be read" })?
         .ok_or(CapabilityError::Invalid { field: "id", reason: "not_found" })?;
     Ok(Note { id: which.id, title: note.title, body: note.body, version: note.version })
+}
+
+/// The phone of the note, or the one the person gives. When there is none, what is missing is the dictionary's to
+/// say: the kernel lists it and the platform asks for it with its kind.
+fn contact(call: &Call, who: WhoToCall) -> Result<Contact, CapabilityError> {
+    let note = crate::storage::find(call.conn, &NoteRef(who.id.clone()))
+        .map_err(|_| CapabilityError::Failed { reason: "the note could not be read" })?
+        .ok_or(CapabilityError::Invalid { field: "id", reason: "not_found" })?;
+    match note.phone.or(who.phone).filter(|p| !p.trim().is_empty()) {
+        Some(phone) => Ok(Contact { title: note.title, phone }),
+        None => Err(CapabilityError::needs("muestra.note", ["phone"])),
+    }
 }
 
 fn prepare(call: &Call, note: NoteInput) -> Result<Proposal, CapabilityError> {
@@ -64,5 +99,17 @@ capability::capability! {
         approval: Required,
         limits: Limits::CHANGE,
         run: change(prepare, save),
+    }
+}
+
+capability::capability! {
+    static CONTACT = "muestra.contacto_de_nota" {
+        description: "Da el título y el teléfono de una nota para llamar; si la nota no tiene teléfono, se lo pide a la persona.",
+        effect: Query,
+        permission: "muestra.notas.leer",
+        data: [Internal, Personal],
+        approval: Never,
+        limits: Limits::READ,
+        run: read(contact),
     }
 }

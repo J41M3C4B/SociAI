@@ -53,7 +53,8 @@ pub enum Content {
         #[allow(dead_code)] // the router reads it (IA-4)
         text: String,
     },
-    /// The person answers what a paused task asked: the values join the input the task waits with.
+    /// The person answers what a paused task asked: the values join the input the task waits with. To fields of the
+    /// dictionary, each value goes under the full id of its field (`muestra.note.phone`).
     Answer { values: Value },
     /// The person approves or rejects a proposal, named by its fingerprint.
     Decision { fingerprint: String, approve: bool },

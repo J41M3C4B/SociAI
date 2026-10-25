@@ -9,6 +9,7 @@
 //! here knows the screens or Tauri: the app gives the runtime who the account is now, the clock and where to deliver.
 //! Neither the kernel nor a module can use this crate: it does not compile.
 
+pub mod dictionary;
 mod executor;
 pub mod outcome;
 pub mod request;
@@ -20,6 +21,7 @@ mod tests;
 use capability::{ContractError, Effect, Fault, Registry, Run};
 use kernel::Modules;
 
+pub use dictionary::{output_fields, outputs_outside_dictionary, OutputField};
 pub use outcome::Outcome;
 pub use request::Request;
 pub use store::migrate;

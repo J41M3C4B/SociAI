@@ -34,6 +34,11 @@ pub enum Fault {
     /// A modification whose `prepare` does not give the kernel's proposal (`kernel::Proposal`). The registry does not
     /// know the kernel either; the platform checks it when the program starts.
     PrepareWithoutProposal,
+    /// Its output names a field the data dictionary does not have. The registry does not know the dictionary (K3);
+    /// the platform checks it when the program starts.
+    UnknownField,
+    /// Its output names a field whose class is not in its `data`, which is the most it may touch (ADR-003 A5).
+    ClassOutsideData,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

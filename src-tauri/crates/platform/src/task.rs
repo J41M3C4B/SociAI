@@ -80,6 +80,9 @@ pub struct Waiting {
     pub input: Value,
     /// The input had a value to correct: running it again counts as a correction.
     pub correction: bool,
+    /// The full ids of the fields of the dictionary the person was asked for; none when nothing was.
+    #[serde(default)]
+    pub asked: Vec<String>,
 }
 
 /// The limits of a kind of task. The defaults live here, in one place; they are not in the code of any agent.
