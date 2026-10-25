@@ -2,12 +2,12 @@
 tipo: bloque
 id: IA-3
 carril: ia
-estado: backlog
+estado: en-curso
 prioridad: media
 caja: Clasificación de datos; Políticas de datos y PII
 pedido_por:
 depende_de: IA-2, IA-8
-rama:
+rama: ia/ia-3-clases-y-politica
 adr:
 creado: 2026-10-20
 cerrado:
@@ -22,6 +22,8 @@ Hoy qué ve la IA se decide en varios lugares: la hoja de la IA, cada herramient
 
 Incluye la regla del proveedor: los términos del plan gratuito de Gemini prohíben mandarle datos personales o confidenciales ([investigación externa](../../investigacion/investigacion-externa.md), §4.2), y hoy nada lo impide.
 
+**Decisión del líder (2026-10-25): el plan gratuito de Gemini es solo para desarrollo.** Sirve para probar sin gasto, con el modelo más básico y con los datos ficticios de `fixtures/`; las pruebas y los flujos reales se hacen con esos datos. En producción ese plan no existe: el líder administra las APIs de pago, y no se entra al sistema sin pagar.
+
 **SubQ como proveedor candidato (nota del líder, 2026-10-21).** El líder tiene una suscripción a SubQ (Subquadratic): un contexto de hasta 12 millones de tokens, con atención dispersa en vez de partir los documentos y recuperarlos por *embeddings*. Ofrece dos modelos, uno de decisión y uno más general, y el líder tiene 100 millones de tokens de regalo. Un documento de una institución no llega ni al millón de tokens, así que alcanzan para probar si sirve para el conocimiento documental (P6, [plano de la IA](../../plano-de-la-ia.md)). Un caso que encaja: las convocatorias, que son públicas y largas.
 
 - **Se hará una investigación especializada** antes de decidir.
@@ -31,24 +33,26 @@ Incluye la regla del proveedor: los términos del plan gratuito de Gemini prohí
   - si vencen.
 
   Mientras no se sepa, la política solo le deja mandar lo público.
+
+  **Resuelto (2026-10-25):** el líder revisó sus términos sobre el control y el tratamiento de los datos. SubQ no entrena con las entradas ni con las salidas, el cliente controla el periodo de retención y no comparte los datos con terceros. Es encargado (C5). Si los tokens de regalo cuentan como pago ya no importa, porque el destino depende de las condiciones (C2).
 - **La comparación de calidad** (frente a la recuperación por fragmentos) va con la batería, cuando exista el IA-4, con una corrida real corta.
 
 ## Terminado cuando
 
-(Propuesta; la aprueba el líder junto con las decisiones C1 a C5 de abajo.)
+Aprobado por el líder el 2026-10-25, con las decisiones C1 a C5 de abajo y su cambio a la C4. Las casillas se marcan cuando cada punto queda hecho.
 
 - [ ] **El ADR-004 fija las clases y su tabla:** las cinco clases que ya usa el diccionario, los destinos, las finalidades y qué permite cada combinación. El líder lo aprueba.
 - [ ] **La política es una sola decisión, en la plataforma** (`platform::policy`). Dada la clase, el destino y la finalidad, dice si el dato va, va tapado, va solo como agregado o no va. Es una tabla de datos, y una prueba la recorre completa sin modelo.
-- [ ] **Cada proveedor declara si es un encargado**, y la política lo lee. Ser encargado quiere decir que no entrena con lo que recibe, lo borra y lo guarda confidencial (LFPDPPP; Reglamento, art. 52).
-  - Anthropic sí es encargado.
-  - Gemini solo si la institución declaró que su proyecto tiene facturación.
-  - SubQ no, mientras sus condiciones no se verifiquen.
+- [ ] **Cada proveedor declara sus condiciones**, y la política las lee. Puede ser un encargado, o un proveedor sin condiciones verificadas. Ser encargado quiere decir que no entrena con lo que recibe, lo borra y lo guarda confidencial (LFPDPPP; Reglamento, art. 52).
+  - Anthropic y Gemini son encargados: en producción solo existen sus APIs de pago, que administra el líder.
+  - SubQ es encargado, porque el líder revisó sus condiciones (C5). Su retención se configura al mínimo.
+  - Un proveedor nuevo entra sin condiciones verificadas hasta que se revisen.
 - [ ] **Se aplica en los cuatro puntos del runtime:**
-  - **Previa:** el texto del chat pasa por el detector local antes de ir a un modelo. Con un proveedor que no es encargado, un texto con datos de personas no sale.
+  - **Previa:** el texto del chat pasa por el detector local antes de ir a un modelo. Con un proveedor sin condiciones verificadas, un texto con datos de personas no sale.
   - **Contexto:** lo que recibe un modelo solo lo arma la política (`ToModel`). El IA-4 no puede llamar a un modelo con otra cosa: no compila.
   - **Ejecución:** se deniega una capacidad que toca clases que la cuenta no ve (K2).
   - **Salida:** la salida de una capacidad se filtra campo por campo, según su destino. Lo tapado se restaura solo hacia la persona.
-- [ ] **Con un proveedor que no es encargado, no sale ningún dato interno, confidencial, personal ni sensible.** Hay pruebas en cada punto.
+- [ ] **Con un proveedor sin condiciones verificadas, no sale ningún dato interno, confidencial, personal ni sensible.** Hay pruebas en cada punto.
 - [ ] **Ninguna regla de qué ve la IA queda en un *prompt*.** El detector (el escáner de hoy) solo encuentra datos; la política decide.
 - [ ] `cargo test` y `pnpm test` pasan, sin red ni gasto.
 
@@ -58,19 +62,19 @@ Incluye la regla del proveedor: los términos del plan gratuito de Gemini prohí
 
 Son las cinco que ya usa el diccionario del [[ERP-2 La clase de cada dato declarada una sola vez|ERP-2]]. El ERP declara la de cada campo; este bloque fija qué permite cada una.
 
-| Clase | Qué es | Ejemplos |
-|---|---|---|
-| `public` | Lo que la institución publica, o lo que publica otro | El nombre legal, el objeto social, una convocatoria |
-| `internal` | De la institución, sin publicar | Las notas, los conteos, los montos de un proyecto |
-| `confidential` | Lo propio protegido: identificadores y cuentas de la institución | El RFC, la CLABE, los folios |
-| `personal` | De una persona identificable que no es la institución | El nombre, el teléfono o el correo de una beneficiaria, de alguien del personal o del patronato |
-| `sensitive_personal` | Lo del art. 2 fr. VI de la LFPDPPP | La salud, el origen étnico, las creencias |
+| Clase                | Qué es                                                           | Ejemplos                                                                                        |
+| -------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `public`             | Lo que la institución publica, o lo que publica otro             | El nombre legal, el objeto social, una convocatoria                                             |
+| `internal`           | De la institución, sin publicar                                  | Las notas, los conteos, los montos de un proyecto                                               |
+| `confidential`       | Lo propio protegido: identificadores y cuentas de la institución | El RFC, la CLABE, los folios                                                                    |
+| `personal`           | De una persona identificable que no es la institución            | El nombre, el teléfono o el correo de una beneficiaria, de alguien del personal o del patronato |
+| `sensitive_personal` | Lo del art. 2 fr. VI de la LFPDPPP                               | La salud, el origen étnico, las creencias                                                       |
 
 ### Los destinos y las finalidades
 
 - **Los destinos:**
   - el modelo de un encargado;
-  - el modelo de un proveedor que no es encargado;
+  - el modelo de un proveedor sin condiciones verificadas;
   - la pantalla de la persona;
   - un aviso;
   - la auditoría.
@@ -81,7 +85,7 @@ Son las cinco que ya usa el diccionario del [[ERP-2 La clase de cada dato declar
 
 ### La tabla
 
-| Clase | Modelo de un encargado | Modelo que no es encargado | Aviso |
+| Clase | Modelo de un encargado | Modelo sin condiciones verificadas | Aviso |
 |---|---|---|---|
 | `public` | Va | Va | Va |
 | `internal` | Va | **No va** | Va |
@@ -105,13 +109,25 @@ Son las cinco que ya usa el diccionario del [[ERP-2 La clase de cada dato declar
 
 ### Las decisiones del líder
 
-| | Decisión | Recomiendo | Por qué |
-|---|---|---|---|
-| **C1** | Cinco clases: las que ya usa el diccionario | Sí | La investigación proponía cuatro. `public` e `internal` se separan porque un proveedor que no es encargado solo puede recibir lo público. |
-| **C2** | El destino es «encargado o no», en vez de «pagado o gratuito» | Sí | Lo que importa es qué hace el proveedor con los datos (art. 52), no si se le paga. Así SubQ cabe sin saber si sus tokens de regalo cuentan como pago. |
-| **C3** | Lo interno no va a un proveedor que no es encargado | Sí | Google usa lo que recibe en el plan gratuito para entrenar, lo leen personas revisoras, y sus términos prohíben lo «confidential». **Consecuencia:** con el plan gratuito, la IA solo trabaja con lo público. Las corridas reales del IA-4 con Mi institución necesitan Anthropic, o Gemini con facturación. |
-| **C4** | Gemini cuenta como encargado solo si la institución declara que su proyecto tiene facturación. Por omisión, no | Sí | La llave no dice si el proyecto paga. La casilla para declararlo en Ajustes es del riel de diseño; mientras no exista, Gemini cuenta como «no encargado». |
-| **C5** | SubQ cuenta como «no encargado» hasta verificar sus condiciones | Sí | Su contrato de API y su acuerdo de datos no son públicos. Si nos los compartes, se verifican en un bloque aparte, y basta cambiar su declaración. La comparación de calidad sigue con la batería del IA-4. |
+Aprobadas el 2026-10-25, con dos cambios del líder:
+- **C4:** la propuesta trataba el plan gratuito de Gemini como una forma de operar, y no lo es.
+- **C5:** el líder revisó los términos de SubQ, que es encargado.
+
+La columna «sin condiciones verificadas» queda para un proveedor nuevo, hasta que se revisen sus condiciones.
+
+**Lo que sí piden los proveedores es lo de siempre:** el aviso de privacidad debe decir qué hacemos con los datos, incluido que un proveedor de IA los trata como encargado. Va como hallazgo para el líder.
+
+**Dos matices de SubQ, para el líder** (no cambian la C5):
+- **La retención cero no es automática:** hay que pedirla, y SubQ la aprueba. Sin ella, guarda a lo más 60 días, como Anthropic guarda 30.
+- **Los terceros:** la página no habla de subencargados. Solo dice que comparte el contenido con su personal y sus asesores bajo confidencialidad. Eso lo regula su acuerdo de tratamiento de datos, que no está publicado en esa página.
+
+| | Decisión | Por qué |
+|---|---|---|
+| **C1** | Cinco clases: las que ya usa el diccionario | La investigación proponía cuatro. `public` e `internal` se separan porque un proveedor sin condiciones verificadas solo puede recibir lo público. |
+| **C2** | El destino depende de las condiciones del proveedor (encargado o sin verificar), no de si se le paga | Lo que importa es qué hace el proveedor con los datos (art. 52). |
+| **C3** | Lo interno no va a un proveedor sin condiciones verificadas | Mientras no se sepa qué hace con lo que recibe, solo puede recibir lo público. |
+| **C4** | **El plan gratuito de Gemini solo existe en desarrollo**, con los datos ficticios de `fixtures/`. En producción solo hay APIs de pago, que administra el líder, y no se entra al sistema sin pagar | Para la política, Gemini es encargado: en producción solo existe de pago, y en desarrollo solo ve datos ficticios. No hace falta ninguna casilla de facturación. |
+| **C5** | **SubQ es encargado.** El líder revisó sus términos sobre el control y el tratamiento de los datos (2026-10-25) | Sus [términos](https://subq.ai/terms) (actualizados el 2026-10-16) dicen:<ul><li>No usa el contenido del cliente para entrenar (§3), y no hay excepción para los créditos de regalo.</li><li>Guarda las entradas y salidas a lo más 60 días, y ofrece retención cero si se le pide (§4).</li><li>Trata ese contenido como confidencial del cliente (§5).</li><li>Como encargado, lo rige su acuerdo de tratamiento de datos (§4).</li></ul>Lo que pide es lo de siempre: tener los permisos para mandar los datos, y que nuestro aviso de privacidad diga qué hacemos con ellos. La comparación de calidad sigue con la batería del IA-4. |
 
 ## Plan
 
@@ -129,9 +145,10 @@ Son las cinco que ya usa el diccionario del [[ERP-2 La clase de cada dato declar
    - las reglas 2 y 3.
 
    Una prueba recorre la tabla completa.
-4. **Los proveedores declaran si son encargados.** El `Runtime` recibe el proveedor activo, con su id y si es encargado, o ninguno.
-   - La app lo arma con la configuración de la IA: Anthropic es encargado; Gemini, solo si `gemini_billing` está declarado.
-   - `gemini_billing` es una clave nueva de `app_settings`, apagada por omisión.
+4. **Los proveedores declaran sus condiciones.** El `Runtime` recibe el proveedor activo, con su id y si es encargado, o ninguno.
+   - La app lo arma con la configuración de la IA. Anthropic y Gemini son encargados (C4).
+   - SubQ también es encargado (C5). Todavía no está en el código: cuando entre como proveedor, lo declara así, con su retención al mínimo.
+   - Un proveedor nuevo entra sin condiciones verificadas, hasta que se revisen.
 5. **Ejecución:** antes de invocar, el ejecutor revisa que cada clase del `data` de la capacidad esté en `kernel::classes_seen` de la cuenta. Si no, deniega con `class_not_seen`, y queda en la auditoría.
 6. **Salida:** antes de entregar `Body::Data`, la plataforma filtra la salida campo por campo (`output_fields`, del IA-8) según su destino.
    - `Data` gana `withheld`: las rutas que se quitaron, para que la pantalla pueda decir que hay algo que no se muestra.
@@ -145,7 +162,7 @@ Son las cinco que ya usa el diccionario del [[ERP-2 La clase de cada dato declar
    - Si va: queda el `ToModel` tapado que recibirá el enrutador.
 9. **Las pruebas:**
    - la tabla completa;
-   - cada punto con un proveedor encargado, con uno que no lo es y sin proveedor;
+   - cada punto con un proveedor encargado, con uno sin condiciones verificadas y sin proveedor;
    - lo tapado restaurado solo hacia la persona;
    - un agregado de menos de 3.
 
@@ -159,10 +176,9 @@ Son las cinco que ya usa el diccionario del [[ERP-2 La clase de cada dato declar
   - Si un rol llega a ver menos clases, eso es de K2.
 - **Diseño:**
   - dibujar `withheld` en la pantalla;
-  - la casilla de facturación de Gemini en Ajustes;
   - los textos de `class_not_seen` y `not_for_this_provider`.
 
-  Hasta entonces, la pantalla muestra lo que sí llega, y Gemini cuenta como «no encargado».
+  Hasta entonces, la pantalla muestra lo que sí llega.
 
 ## Cómo probarlo
 
