@@ -34,12 +34,13 @@ pub fn run() {
             let registry = capability::Registry::discover()
                 .map_err(|errors| errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))?;
             // the modules of the ERP, and the catalog of permissions they and the kernel define (K2, K12): a
-            // capability that asks for a permission nobody defines stops the app too (ADR-003 A2)
+            // capability that asks for a permission nobody defines stops the app too (ADR-003 A2), and so does a
+            // modification that does not prepare the kernel's proposal (ERP-9)
             let modules = kernel::Modules::discover()
                 .map_err(|errors| errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))?;
-            let unknown = platform::unknown_permissions(&registry, &modules);
-            if !unknown.is_empty() {
-                return Err(unknown.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n").into());
+            let faults = [platform::unknown_permissions(&registry, &modules), platform::changes_without_proposal(&registry)].concat();
+            if !faults.is_empty() {
+                return Err(faults.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n").into());
             }
             app.manage(registry);
             app.manage(modules);

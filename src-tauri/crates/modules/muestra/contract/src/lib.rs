@@ -15,7 +15,7 @@ pub struct NoteRef(pub String);
 
 /// What saving a note asks: the same input prepares the change and applies it. A new note brings its id, made with
 /// `kernel::new_id("nota")` by whoever asks, so preparing and applying see the same note.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NoteInput {
     pub id: String,
     pub title: String,

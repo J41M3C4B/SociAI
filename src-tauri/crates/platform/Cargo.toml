@@ -16,9 +16,10 @@ thiserror = { workspace = true }
 # the same versions as the app, so nothing is built twice
 hex = { workspace = true }
 jsonschema = "0.58.3"
+# the schema of the kernel's proposal, to check the modifications when the app starts
+schemars = { workspace = true }
 sha2 = { workspace = true }
 ulid = { workspace = true }
 
 [dev-dependencies]
-schemars = { workspace = true }
 tempfile = { workspace = true }

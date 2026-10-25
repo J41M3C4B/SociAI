@@ -7,3 +7,5 @@ publish = false
 
 [dependencies]
 serde = { workspace = true }
+# the schema of its input, for the capabilities that take it
+schemars = { workspace = true }

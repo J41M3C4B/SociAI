@@ -5,14 +5,20 @@ use serde_json::{json, Value};
 
 use super::outcome::{Again, Ask, Body, Next, Outcome};
 use super::request::{Channel, Content, Request};
-use super::task::{Limits, Reached, Task, TaskState};
+use super::task::{Limits, Phase, Reached, Task, TaskState};
 use super::*;
 use capability::Registry;
 use kernel::Modules;
 
-/// A module as any other would be, with the capabilities the tests need. It keeps a name in a table of its own.
-mod trial {
+/// A module as any other would be, with the capabilities the tests need. It keeps a name in a table of its own, and
+/// changes it on the kernel (ERP-9), like every module, and its part of the dictionary (K3) checks the name.
+pub mod trial {
     use capability::{Call, CapabilityError, Limits};
+    use kernel::{Applied, Changeable, Draft, Entity, Field, Kind, Origin, Proposal, Ref};
+    use rusqlite::Connection;
+    use serde_json::{json, Map, Value};
+
+    pub const NAME: Entity = Entity { id: "name", fields: &[Field::new("name", Kind::Text, "public").mandatory().max_len(40)] };
 
     #[derive(serde::Deserialize, schemars::JsonSchema)]
     pub struct Nothing {}
@@ -22,15 +28,9 @@ mod trial {
         pub name: String,
     }
 
-    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
     pub struct Rename {
         pub name: String,
-    }
-
-    #[derive(serde::Serialize, schemars::JsonSchema)]
-    pub struct Change {
-        pub from: String,
-        pub to: String,
     }
 
     #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -42,28 +42,69 @@ mod trial {
         CapabilityError::Failed { reason: "the database did not answer" }
     }
 
-    fn current(call: &Call) -> Result<String, CapabilityError> {
-        call.conn.query_row("SELECT name FROM trial_name WHERE id = 1", [], |r| r.get(0)).map_err(db)
+    fn current(conn: &Connection) -> rusqlite::Result<(String, i64)> {
+        conn.query_row("SELECT name, version FROM trial_name WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+    }
+
+    /// The name of the trial, for the kernel: what it needs to prepare and apply one change of it.
+    pub struct SetName {
+        name: String,
+        input: Value,
+    }
+
+    /// The change of the name that this input asks for.
+    pub fn set_name(name: &str, input: &impl serde::Serialize) -> SetName {
+        SetName { name: name.into(), input: serde_json::to_value(input).unwrap() }
+    }
+
+    fn fields(name: &str) -> Map<String, Value> {
+        Map::from_iter([("name".to_string(), json!(name))])
+    }
+
+    impl Changeable for SetName {
+        fn prepare(&self, conn: &Connection) -> rusqlite::Result<Proposal> {
+            let (now, version) = current(conn)?;
+            // the dictionary checks the name (ERP-2): nothing is left that only the module can check
+            Ok(kernel::propose(
+                &NAME,
+                Draft { entity: Ref::new("trial", "name", "1"), version, before: Some(fields(&now)), after: fields(&self.name), invalid: vec![], input: &self.input },
+            ))
+        }
+
+        fn version(&self, conn: &Connection) -> rusqlite::Result<i64> {
+            Ok(current(conn)?.1)
+        }
+
+        fn write(&self, conn: &Connection, proposal: &Proposal) -> rusqlite::Result<()> {
+            conn.execute(
+                "UPDATE trial_name SET name = ?1, version = version + 1 WHERE id = 1 AND version = ?2",
+                rusqlite::params![self.name, proposal.base_version],
+            )?;
+            Ok(())
+        }
+    }
+
+    /// What happened to the name, for whoever reacts to it.
+    pub const NAME_CHANGED: &str = "trial.name_changed";
+
+    fn apply(call: &mut Call, change: SetName) -> Result<Applied, CapabilityError> {
+        let origin = Origin::Task { task: call.task.into(), account: call.by.into() };
+        kernel::apply(call.conn, &change, call.fingerprint, &origin, NAME_CHANGED).map_err(|e| CapabilityError::from_apply(e.code()))
     }
 
     pub fn read(call: &Call, _: Nothing) -> Result<Name, CapabilityError> {
-        Ok(Name { name: current(call)? })
+        Ok(Name { name: current(call.conn).map_err(db)?.0 })
     }
 
-    pub fn preview(call: &Call, ask: Rename) -> Result<Change, CapabilityError> {
+    pub fn preview(call: &Call, ask: Rename) -> Result<Proposal, CapabilityError> {
         if ask.name.trim().is_empty() {
             return Err(CapabilityError::NeedsPerson { what: "the new name" });
         }
-        if ask.name.chars().count() > 40 {
-            return Err(CapabilityError::Invalid { field: "name", reason: "longer than 40 letters" });
-        }
-        Ok(Change { from: current(call)?, to: ask.name })
+        set_name(&ask.name, &ask).prepare(call.conn).map_err(db)
     }
 
-    pub fn rename(call: &Call, ask: Rename) -> Result<Change, CapabilityError> {
-        let from = current(call)?;
-        call.conn.execute("UPDATE trial_name SET name = ?1, task = ?2 WHERE id = 1", rusqlite::params![ask.name, call.task]).map_err(db)?;
-        Ok(Change { from, to: ask.name })
+    pub fn rename(call: &mut Call, ask: Rename) -> Result<Applied, CapabilityError> {
+        apply(call, set_name(&ask.name, &ask))
     }
 
     /// Never has enough until the count reaches 100: a task that does not advance.
@@ -78,22 +119,43 @@ mod trial {
         Err(CapabilityError::Failed { reason: "always fails" })
     }
 
-    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
     pub struct RenameWhy {
         pub name: String,
         pub why: Option<String>,
     }
 
-    pub fn preview_why(call: &Call, ask: RenameWhy) -> Result<Change, CapabilityError> {
-        Ok(Change { from: current(call)?, to: ask.name })
+    pub fn preview_why(call: &Call, ask: RenameWhy) -> Result<Proposal, CapabilityError> {
+        set_name(&ask.name, &ask).prepare(call.conn).map_err(db)
     }
 
     /// Only when it applies does it find that something of the person is missing.
-    pub fn rename_why(call: &Call, ask: RenameWhy) -> Result<Change, CapabilityError> {
+    pub fn rename_why(call: &mut Call, ask: RenameWhy) -> Result<Applied, CapabilityError> {
         if ask.why.is_none() {
             return Err(CapabilityError::NeedsPerson { what: "why the name changes" });
         }
-        rename(call, Rename { name: ask.name })
+        apply(call, set_name(&ask.name, &ask))
+    }
+
+    /// A modification that does not prepare the kernel's proposal: the app would not start with it.
+    pub fn loose(_: &Call, ask: Rename) -> Result<Name, CapabilityError> {
+        Ok(Name { name: ask.name })
+    }
+
+    pub fn loose_apply(_: &mut Call, ask: Rename) -> Result<Name, CapabilityError> {
+        Ok(Name { name: ask.name })
+    }
+
+    capability::capability! {
+        static LOOSE = "trial.loose" {
+            description: "Un cambio que no prepara la propuesta del núcleo.",
+            effect: Modify,
+            permission: "kernel.usar",
+            data: [Public],
+            approval: Required,
+            limits: Limits::CHANGE,
+            run: change(loose, loose_apply),
+        }
     }
 
     capability::capability! {
@@ -218,7 +280,7 @@ struct Accounts {
 }
 
 impl super::Accounts for Accounts {
-    fn now(&self, who: &Who) -> Option<kernel::Account> {
+    fn now(&self, _: &Connection, who: &Who) -> Option<kernel::Account> {
         (who.account == ANA_ID).then(|| kernel::Account {
             id: ANA_ID.into(),
             organization: self.organization.get().into(),
@@ -239,7 +301,7 @@ impl Deliver for Window {
 }
 
 struct World {
-    conn: Connection,
+    conn: RefCell<Connection>,
     registry: Registry,
     modules: Modules,
     clock: Clock,
@@ -252,7 +314,7 @@ const LUIS_ID: &str = "usr_01JZZZZZZZZZZZZZZZZZZZZZZZ";
 const ANA: Who = Who { account: ANA_ID, organization: "org" };
 
 fn trial_table(conn: &Connection) {
-    conn.execute_batch("CREATE TABLE trial_name (id INTEGER PRIMARY KEY, name TEXT NOT NULL, task TEXT); INSERT INTO trial_name (id, name) VALUES (1, 'Casa Hogar');")
+    conn.execute_batch("CREATE TABLE trial_name (id INTEGER PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL); INSERT INTO trial_name (id, name, version) VALUES (1, 'Casa Hogar', 1);")
         .unwrap();
 }
 
@@ -272,7 +334,7 @@ fn world() -> World {
 impl World {
     fn on(conn: Connection) -> World {
         World {
-            conn,
+            conn: RefCell::new(conn),
             registry: Registry::discover().unwrap(),
             modules: Modules::discover().unwrap(),
             clock: Clock(Cell::new(1_000_000)),
@@ -288,7 +350,7 @@ impl World {
     fn submit(&self, who: &Who, task: Option<&str>, content: Content) -> Outcome {
         let runtime = self.runtime();
         let request = Request { channel: Channel::Screen { place: "institution".into() }, task: task.map(String::from), content };
-        runtime.submit(&self.conn, who, request).unwrap()
+        runtime.submit(&mut self.conn.borrow_mut(), who, request).unwrap()
     }
 
     fn invoke(&self, task: Option<&str>, capability: &str, input: Value) -> Outcome {
@@ -303,17 +365,23 @@ impl World {
         self.submit(&ANA, Some(task), Content::Decision { fingerprint: fingerprint.into(), approve })
     }
 
+    /// How many rows a table has.
+    fn count(&self, table: &str) -> i64 {
+        self.conn.borrow().query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+    }
+
     fn name(&self) -> String {
-        self.conn.query_row("SELECT name FROM trial_name WHERE id = 1", [], |r| r.get(0)).unwrap()
+        self.conn.borrow().query_row("SELECT name FROM trial_name WHERE id = 1", [], |r| r.get(0)).unwrap()
     }
 
     fn task(&self, id: &str) -> Task {
-        store::load_task(&self.conn, id).unwrap().unwrap()
+        store::load_task(&self.conn.borrow(), id).unwrap().unwrap()
     }
 
     /// The trail of a task in the kernel's audit store: (moment, capability, outcome, reason).
     fn trail(&self, id: &str) -> Vec<Line> {
         self.conn
+            .borrow()
             .prepare("SELECT event, subject, outcome, reason FROM kernel_audit WHERE correlation_id = ?1 ORDER BY rowid")
             .unwrap()
             .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
@@ -347,7 +415,8 @@ fn a_change_from_a_screen_walks_the_whole_path() {
     println!("  tarea {task}: {:?}, {:?}", asked.state, asked.body);
     assert_eq!(asked.state, TaskState::Paused);
     let Body::Proposal { proposal, again: None, .. } = &asked.body else { panic!("{asked:?}") };
-    assert_eq!(proposal, &json!({ "from": "Casa Hogar", "to": "Casa Hogar San José" }));
+    assert_eq!(proposal["base_version"], 1);
+    assert_eq!(proposal["changes"], json!([{ "field": "name", "before": "Casa Hogar", "after": "Casa Hogar San José", "protected": false }]));
     assert_eq!(w.name(), "Casa Hogar", "nothing changes before the approval");
 
     println!("La persona revisa la propuesta y la aprueba.");
@@ -356,8 +425,10 @@ fn a_change_from_a_screen_walks_the_whole_path() {
     assert_eq!(done.task, task, "the same task, resumed");
     assert_eq!(done.state, TaskState::Done);
     assert!(matches!(&done.body, Body::Data { capability, .. } if capability == "trial.rename"));
-    let (name, by_task): (String, String) = w.conn.query_row("SELECT name, task FROM trial_name", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
-    assert_eq!((name.as_str(), by_task.as_str()), ("Casa Hogar San José", task.as_str()), "the change carries the id of its task");
+    assert_eq!(w.name(), "Casa Hogar San José");
+    let (origin, by_task, by): (String, String, String) =
+        w.conn.borrow().query_row("SELECT origin, task_id, account_id FROM kernel_change", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    assert_eq!((origin.as_str(), by_task.as_str(), by.as_str()), ("task", task.as_str(), ANA_ID), "the change carries its task and who approved it");
 
     println!("Lo que quedó en la auditoría del núcleo para esa tarea:");
     let trail = w.trail(&task);
@@ -376,7 +447,7 @@ fn a_change_from_a_screen_walks_the_whole_path() {
             line("task.closed", None, Some("done"), Some("done")),
         ]
     );
-    let account: String = w.conn.query_row("SELECT DISTINCT account_id FROM kernel_audit WHERE correlation_id = ?1", [&task], |r| r.get(0)).unwrap();
+    let account: String = w.conn.borrow().query_row("SELECT DISTINCT account_id FROM kernel_audit WHERE correlation_id = ?1", [&task], |r| r.get(0)).unwrap();
     assert_eq!(account, ANA_ID, "each moment says for whom the task runs");
     let delivered = w.window.0.borrow();
     assert_eq!(delivered.len(), 2, "each outcome is also handed to the window");
@@ -431,11 +502,12 @@ fn every_close_is_recorded_with_its_reason_and_no_personal_data() {
 
     // the trail holds ids and fixed codes: never the name the person wrote
     let trail: Vec<String> = w.conn
+        .borrow()
         .prepare("SELECT event || ' ' || ifnull(subject, '') || ' ' || ifnull(outcome, '') || ' ' || ifnull(reason, '') FROM kernel_audit")
         .unwrap()
         .query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
     assert!(trail.iter().all(|l| l.chars().all(|c| c.is_ascii_lowercase() || c == '_' || c == '.' || c == ' ')), "{trail:?}");
-    let everything: String = w.conn.query_row("SELECT group_concat(quote(at) || quote(event) || quote(correlation_id) || quote(account_id) || quote(subject) || quote(outcome) || quote(reason), ' ') FROM kernel_audit", [], |r| r.get(0)).unwrap();
+    let everything: String = w.conn.borrow().query_row("SELECT group_concat(quote(at) || quote(event) || quote(correlation_id) || quote(account_id) || quote(subject) || quote(outcome) || quote(reason), ' ') FROM kernel_audit", [], |r| r.get(0)).unwrap();
     assert!(!everything.contains("Rosa"));
 }
 
@@ -467,7 +539,8 @@ fn corrections_have_a_limit() {
     let w = world();
     let long = |i: usize| format!("{}{i}", "x".repeat(50));
     let mut o = w.invoke(None, "trial.rename", json!({ "name": long(0) }));
-    assert!(matches!(&o.body, Body::Clarification { ask: Ask::Correct { field, .. }, .. } if field == "name"));
+    // what does not pass comes in the proposal: the person corrects it, with its field and its code
+    assert_eq!(o.body, Body::Clarification { capability: "trial.rename".into(), ask: Ask::Correct { field: "name".into(), reason: "too_long".into() } });
     for i in 1..=3 {
         o = w.answer(&o.task, json!({ "name": long(i) }));
         assert_eq!(o.state, TaskState::Paused, "correction {i}");
@@ -534,7 +607,7 @@ fn new_parameters_make_the_earlier_approval_stale() {
     let o = w.decide(&task, &fingerprint_of(&second), true);
     assert_eq!(o.state, TaskState::Done);
     assert_eq!(w.name(), "Dos");
-    let states: Vec<String> = w.conn.prepare("SELECT state FROM ai_approval ORDER BY asked_ms").unwrap()
+    let states: Vec<String> = w.conn.borrow().prepare("SELECT state FROM ai_approval ORDER BY asked_ms").unwrap()
         .query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
     assert_eq!(states, vec!["stale", "approved"]);
 }
@@ -601,18 +674,103 @@ fn a_permission_nobody_defines_is_found_before_starting() {
     assert_eq!(unknown, vec!["trial.unknown"]);
 }
 
+/// The app closed while the change ran: the step stayed «started». The kernel says whether its fingerprint was
+/// applied; applied, the task ends well, and the change is never made twice.
 #[test]
-fn an_apply_that_never_ended_is_not_run_again() {
+fn an_apply_that_never_ended_and_was_applied_ends_well() {
     let w = world();
     let asked = w.invoke(None, "trial.rename", json!({ "name": "Otra" }));
-    // the app closed while the change ran: the step stayed «started»
-    store::start_step(&w.conn, &asked.task, 2, "trial.rename", super::task::Phase::Apply, "h", 0).unwrap();
-    let o = w.decide(&asked.task, &fingerprint_of(&asked), true);
+    let fp = fingerprint_of(&asked);
+    {
+        let mut conn = w.conn.borrow_mut();
+        store::start_step(&conn, &asked.task, 2, "trial.rename", Phase::Apply, "h", Some(&fp), 0).unwrap();
+        let origin = kernel::Origin::Task { task: asked.task.clone(), account: ANA_ID.into() };
+        kernel::apply(&mut conn, &trial::set_name("Otra", &json!({ "name": "Otra" })), Some(&fp), &origin, trial::NAME_CHANGED).unwrap();
+    }
+    let o = w.decide(&asked.task, &fp, true);
+    assert_eq!(o.state, TaskState::Done);
+    assert!(matches!(&o.body, Body::Data { capability, value } if capability == "trial.rename" && value["already_applied"] == true), "{o:?}");
+    assert_eq!((w.name().as_str(), w.count("kernel_change")), ("Otra", 1), "it is never made twice");
+    let result: String = w.conn.borrow().query_row("SELECT result FROM ai_step WHERE task_id = ?1 AND n = 2", [&asked.task], |r| r.get(0)).unwrap();
+    assert_eq!(result, "ok");
+}
+
+/// Not applied, the task says so and applies nothing on its own: the kernel's transaction leaves no change half made.
+#[test]
+fn an_apply_that_never_ended_and_was_not_applied_is_not_run_again() {
+    let w = world();
+    let asked = w.invoke(None, "trial.rename", json!({ "name": "Otra" }));
+    let fp = fingerprint_of(&asked);
+    store::start_step(&w.conn.borrow(), &asked.task, 2, "trial.rename", Phase::Apply, "h", Some(&fp), 0).unwrap();
+    let o = w.decide(&asked.task, &fp, true);
     assert_eq!(o.state, TaskState::Error);
+    assert_eq!(o.body, Body::Error { code: "not_applied".into(), next: Next::StartAgain });
+    assert_eq!((w.name().as_str(), w.count("kernel_change")), ("Casa Hogar", 0), "it is never repeated blindly");
+    assert!(w.trail(&asked.task).contains(&line("task.step", Some("trial.rename"), Some("not_applied"), None)));
+}
+
+/// An apply with nothing to ask the kernel about (not a change of the kernel's) stays uncertain.
+#[test]
+fn an_apply_the_kernel_cannot_tell_about_stays_uncertain() {
+    let w = world();
+    let asked = w.invoke(None, "trial.rename", json!({ "name": "Otra" }));
+    store::start_step(&w.conn.borrow(), &asked.task, 2, "trial.rename", Phase::Apply, "h", None, 0).unwrap();
+    let o = w.decide(&asked.task, &fingerprint_of(&asked), true);
     assert_eq!(o.body, Body::Error { code: "uncertain_change".into(), next: Next::CheckHistory });
-    assert_eq!(w.name(), "Casa Hogar", "it is never repeated blindly");
-    let result: String = w.conn.query_row("SELECT result FROM ai_step WHERE task_id = ?1 AND n = 2", [&asked.task], |r| r.get(0)).unwrap();
-    assert_eq!(result, "uncertain");
+    assert_eq!(w.name(), "Casa Hogar");
+}
+
+/// The person approves the kernel's proposal: its fingerprint takes the version of the datum, and the kernel applies
+/// only that one.
+#[test]
+fn the_approval_is_tied_to_the_kernels_proposal() {
+    let w = world();
+    let asked = w.invoke(None, "trial.rename", json!({ "name": "Otra" }));
+    let fp = fingerprint_of(&asked);
+    assert_eq!(fp, kernel::fingerprint(&kernel::Ref::new("trial", "name", "1"), 1, &json!({ "name": "Otra" })));
+    assert_ne!(fp, super::executor::fingerprint("trial.rename", &json!({ "name": "Otra" })));
+    let done = w.decide(&asked.task, &fp, true);
+    assert_eq!(done.state, TaskState::Done);
+    let applied: String = w.conn.borrow().query_row("SELECT fingerprint FROM kernel_change", [], |r| r.get(0)).unwrap();
+    assert_eq!(applied, fp);
+}
+
+/// Someone changed the datum after the person approved: the kernel does not apply it, and the person sees it as it is
+/// now and approves it again.
+#[test]
+fn a_datum_that_changed_after_the_approval_is_prepared_and_approved_again() {
+    let w = world();
+    let asked = w.invoke(None, "trial.rename", json!({ "name": "Otra" }));
+    w.conn.borrow().execute("UPDATE trial_name SET name = 'Casa Hogar A.C.', version = version + 1", []).unwrap();
+
+    let again = w.decide(&asked.task, &fingerprint_of(&asked), true);
+    assert_eq!(again.state, TaskState::Paused);
+    let Body::Proposal { proposal, again: Some(Again::DataChanged), .. } = &again.body else { panic!("{again:?}") };
+    assert_eq!(proposal["changes"][0]["before"], "Casa Hogar A.C.", "the datum as it is now");
+    assert_eq!(serde_json::to_value(&again).unwrap()["body"]["again"], "data_changed");
+    assert_ne!(fingerprint_of(&again), fingerprint_of(&asked));
+    assert_eq!(w.name(), "Casa Hogar A.C.", "nothing applied on the earlier approval");
+    assert!(w.trail(&asked.task).contains(&line("task.step", Some("trial.rename"), Some("stale"), None)));
+
+    let done = w.decide(&asked.task, &fingerprint_of(&again), true);
+    assert_eq!(done.state, TaskState::Done);
+    assert_eq!(w.name(), "Otra");
+}
+
+#[test]
+fn a_proposal_without_changes_asks_for_no_approval() {
+    let w = world();
+    let o = w.invoke(None, "trial.rename", json!({ "name": "Casa Hogar" }));
+    assert_eq!((o.state, o.body.clone()), (TaskState::Done, Body::State { reason: "nothing_to_change".into() }));
+    assert_eq!((w.count("ai_approval"), w.count("kernel_change")), (0, 0));
+}
+
+/// A modification whose `prepare` does not give the kernel's proposal stops the app when it starts.
+#[test]
+fn a_change_without_the_kernels_proposal_is_found_before_starting() {
+    let w = world();
+    let loose: Vec<&str> = changes_without_proposal(&w.registry).iter().map(|e| e.id).collect();
+    assert_eq!(loose, vec!["trial.loose"]);
 }
 
 #[test]
@@ -625,8 +783,8 @@ fn a_task_of_another_account_is_not_touched() {
     assert_eq!(o.state, TaskState::Denied);
     assert_eq!(w.task(&asked.task).state, TaskState::Paused);
     let runtime = w.runtime();
-    assert!(runtime.task(&w.conn, &luis, &asked.task).unwrap().is_none(), "nor can it be read");
-    assert_eq!(runtime.task(&w.conn, &ANA, &asked.task).unwrap(), Some(asked));
+    assert!(runtime.task(&w.conn.borrow(), &luis, &asked.task).unwrap().is_none(), "nor can it be read");
+    assert_eq!(runtime.task(&w.conn.borrow(), &ANA, &asked.task).unwrap(), Some(asked));
 }
 
 #[test]
@@ -725,5 +883,5 @@ fn a_request_that_changes_nothing_keeps_what_the_task_said_last() {
     let o = w.answer(&asked.task, json!({ "name": "Tercera" }));
     assert_eq!(o.body, Body::Error { code: "not_waiting".into(), next: Next::StartAgain });
     let runtime = w.runtime();
-    assert_eq!(runtime.task(&w.conn, &ANA, &asked.task).unwrap(), Some(asked), "the proposal is still what waits");
+    assert_eq!(runtime.task(&w.conn.borrow(), &ANA, &asked.task).unwrap(), Some(asked), "the proposal is still what waits");
 }

@@ -16,16 +16,15 @@ use platform::{Accounts, Deliver, Outcome, Request, Runtime, SystemClock, Who};
 /// The account as it is now, for the kernel: only while the session is open, not locked and of this same account.
 struct SessionAccounts<'a> {
     session: &'a Session,
-    conn: &'a Connection,
 }
 
 impl Accounts for SessionAccounts<'_> {
-    fn now(&self, who: &Who) -> Option<kernel::Account> {
+    fn now(&self, conn: &Connection, who: &Who) -> Option<kernel::Account> {
         let open = self.session.state.lock().ok().is_some_and(|s| !s.locked && s.user.as_ref().is_some_and(|u| u.id == who.account));
         if !open {
             return None;
         }
-        crate::core::access::service::account(self.conn, who.account).ok().flatten()
+        crate::core::access::service::account(conn, who.account).ok().flatten()
     }
 }
 
@@ -49,12 +48,12 @@ pub fn runtime_submit(
 ) -> Result<Outcome, UiError> {
     let gate = guard(&session, "runtime_submit")?;
     let user = gate.user()?;
-    let conn = lock(&db)?;
+    let mut conn = lock(&db)?;
     // one database per institution (ADR-002, D4): the organization is the institution of the base
     let organization = crate::core::institution::id(&conn).unwrap_or_default();
-    let accounts = SessionAccounts { session: &session, conn: &conn };
+    let accounts = SessionAccounts { session: &session };
     let runtime = Runtime { registry: &registry, modules: &modules, accounts: &accounts, clock: &SystemClock, deliver: &Window(app) };
-    runtime.submit(&conn, &Who { account: &user.id, organization: &organization }, request).map_err(|_| UiError::internal())
+    runtime.submit(&mut conn, &Who { account: &user.id, organization: &organization }, request).map_err(|_| UiError::internal())
 }
 
 /// The last outcome of a task of the person, to ask for it later.
@@ -71,7 +70,7 @@ pub fn runtime_task(
     let user = gate.user()?;
     let conn = lock(&db)?;
     let organization = crate::core::institution::id(&conn).unwrap_or_default();
-    let accounts = SessionAccounts { session: &session, conn: &conn };
+    let accounts = SessionAccounts { session: &session };
     let runtime = Runtime { registry: &registry, modules: &modules, accounts: &accounts, clock: &SystemClock, deliver: &Window(app) };
     runtime.task(&conn, &Who { account: &user.id, organization: &organization }, &task).map_err(|_| UiError::internal())
 }

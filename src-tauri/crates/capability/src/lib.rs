@@ -88,7 +88,7 @@
 //! # #[derive(serde::Serialize, schemars::JsonSchema)]
 //! # struct Done {}
 //! # fn preview(_: &Call, _: Name) -> Result<Done, CapabilityError> { Ok(Done {}) }
-//! # fn save(_: &Call, _: Other) -> Result<Done, CapabilityError> { Ok(Done {}) }
+//! # fn save(_: &mut Call, _: Other) -> Result<Done, CapabilityError> { Ok(Done {}) }
 //!
 //! capability::capability! {
 //!     static RENAME = "institution.rename" {
@@ -152,7 +152,7 @@ macro_rules! capability {
         $crate::capability!(@declare $name, $id, $description, $effect, $permission, [$($class),*], $approval, $limits,
             $crate::Run::Change {
                 prepare: $crate::capability!(@step $prepare),
-                apply: $crate::capability!(@step $apply),
+                apply: $crate::capability!(@apply $apply),
             },
             $prepare);
     };
@@ -170,6 +170,25 @@ macro_rules! capability {
             output: {
                 fn output() -> $crate::Value {
                     $crate::output_schema($f)
+                }
+                output
+            },
+        }
+    };
+    (@apply $f:path) => {
+        $crate::Apply {
+            call: {
+                fn call(
+                    call: &mut $crate::Call,
+                    input: $crate::Value,
+                ) -> ::std::result::Result<$crate::Value, $crate::CapabilityError> {
+                    $crate::adapt_apply(call, input, $f)
+                }
+                call
+            },
+            output: {
+                fn output() -> $crate::Value {
+                    $crate::apply_output_schema($f)
                 }
                 output
             },

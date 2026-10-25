@@ -42,7 +42,7 @@ mod sample {
         Ok(Change { from: "Old".into(), to: ask.name })
     }
 
-    pub fn rename(call: &Call, ask: Rename) -> Result<Change, CapabilityError> {
+    pub fn rename(call: &mut Call, ask: Rename) -> Result<Change, CapabilityError> {
         Ok(Change { from: call.by.into(), to: ask.name })
     }
 
@@ -111,8 +111,8 @@ fn the_schemas_come_from_the_types() {
 
 #[test]
 fn a_capability_runs_over_json_with_its_call() {
-    let conn = Connection::open_in_memory().unwrap();
-    let call = Call::new(&conn, "account-1", "task-1");
+    let mut conn = Connection::open_in_memory().unwrap();
+    let mut call = Call::new(&mut conn, "account-1", "task-1");
     let registry = Registry::discover().unwrap();
 
     let Run::Read(read) = registry.get("sample.missing").unwrap().run else { panic!() };
@@ -120,17 +120,28 @@ fn a_capability_runs_over_json_with_its_call() {
 
     let Run::Change { prepare, apply } = registry.get("sample.rename").unwrap().run else { panic!() };
     assert_eq!((prepare.call)(&call, json!({ "name": "Nuevo" })).unwrap(), json!({ "from": "Old", "to": "Nuevo" }));
-    assert_eq!((apply.call)(&call, json!({ "name": "Nuevo" })).unwrap(), json!({ "from": "account-1", "to": "Nuevo" }));
+    assert_eq!((apply.call)(&mut call, json!({ "name": "Nuevo" })).unwrap(), json!({ "from": "account-1", "to": "Nuevo" }));
     assert_eq!(
         (prepare.call)(&call, json!({ "name": " " })),
         Err(CapabilityError::NeedsPerson { what: "the new name" })
     );
 }
 
+/// What the kernel answers to an `apply`, by its code, is the same error for every module (ERP-9).
+#[test]
+fn the_answers_of_the_kernel_have_a_fixed_translation() {
+    for code in ["prepare_again", "invalid", "nothing_to_change"] {
+        assert_eq!(CapabilityError::from_apply(code), CapabilityError::Stale, "{code}");
+    }
+    for code in ["bad_origin", "bad_fact", "version_not_raised", "database"] {
+        assert_eq!(CapabilityError::from_apply(code), CapabilityError::Failed { reason: code }, "{code}");
+    }
+}
+
 #[test]
 fn a_wrong_input_never_quotes_what_it_got() {
-    let conn = Connection::open_in_memory().unwrap();
-    let call = Call::new(&conn, "account-1", "task-1");
+    let mut conn = Connection::open_in_memory().unwrap();
+    let call = Call::new(&mut conn, "account-1", "task-1");
     let Run::Read(read) = Registry::discover().unwrap().get("sample.missing").unwrap().run else { panic!() };
     let err = (read.call)(&call, json!({ "window": 4455667788u64 })).unwrap_err();
     assert_eq!(err, CapabilityError::Invalid { field: "input", reason: "does not fit the schema of the capability" });
@@ -151,7 +162,12 @@ fn nothing(_: &Call, _: Value) -> Result<Value, CapabilityError> {
     Ok(Value::Null)
 }
 
+fn nothing_applied(_: &mut Call, _: Value) -> Result<Value, CapabilityError> {
+    Ok(Value::Null)
+}
+
 const STEP: Step = Step { call: nothing, output: object };
+const APPLY: Apply = Apply { call: nothing_applied, output: object };
 
 const fn contract(id: &'static str) -> Capability {
     Capability {
@@ -201,7 +217,7 @@ fn a_sensitive_action_without_approval_is_refused() {
     static SENSITIVE: [Capability; 1] = [Capability {
         effect: Effect::Sensitive,
         limits: Limits::CHANGE,
-        run: Run::Change { prepare: STEP, apply: STEP },
+        run: Run::Change { prepare: STEP, apply: APPLY },
         ..contract("probe.send")
     }];
     assert_eq!(faults_of(&SENSITIVE), [Fault::SensitiveWithoutApproval]);
@@ -212,7 +228,7 @@ fn a_change_that_is_not_idempotent_is_not_retried() {
     static RETRIED: [Capability; 1] = [Capability {
         effect: Effect::Modify,
         limits: Limits { retries: 1, ..Limits::CHANGE },
-        run: Run::Change { prepare: STEP, apply: STEP },
+        run: Run::Change { prepare: STEP, apply: APPLY },
         ..contract("probe.save")
     }];
     assert_eq!(faults_of(&RETRIED), [Fault::RetriesWithoutIdempotence]);
@@ -220,7 +236,7 @@ fn a_change_that_is_not_idempotent_is_not_retried() {
     static IDEMPOTENT: [Capability; 1] = [Capability {
         effect: Effect::Modify,
         limits: Limits { retries: 1, idempotent: true, ..Limits::CHANGE },
-        run: Run::Change { prepare: STEP, apply: STEP },
+        run: Run::Change { prepare: STEP, apply: APPLY },
         ..contract("probe.save")
     }];
     assert_eq!(faults_of(&IDEMPOTENT), []);
@@ -229,7 +245,7 @@ fn a_change_that_is_not_idempotent_is_not_retried() {
 #[test]
 fn the_run_must_fit_the_effect() {
     static QUERY_THAT_CHANGES: [Capability; 1] =
-        [Capability { run: Run::Change { prepare: STEP, apply: STEP }, ..contract("probe.query") }];
+        [Capability { run: Run::Change { prepare: STEP, apply: APPLY }, ..contract("probe.query") }];
     assert_eq!(faults_of(&QUERY_THAT_CHANGES), [Fault::RunDoesNotFitEffect]);
     static CHANGE_THAT_READS: [Capability; 1] =
         [Capability { effect: Effect::Modify, limits: Limits::CHANGE, ..contract("probe.change") }];

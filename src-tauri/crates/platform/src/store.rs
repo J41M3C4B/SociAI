@@ -71,6 +71,32 @@ CREATE INDEX ai_event_task ON ai_event (task_id, at_ms);
     },
     // the trail of the tasks goes to the kernel's audit store (K9, ERP-10): one audit store, not two (IA-5)
     kernel::Migration { version: 2, sql: "DROP TABLE ai_event;" },
+    // the approval of a change is tied to the kernel's proposal (IA-7): an approval keeps the fingerprint of the
+    // proposal and the one of its input, and an apply keeps the fingerprint it applies, to ask the kernel later
+    // whether it was applied; a step may end stale or not applied
+    kernel::Migration {
+        version: 3,
+        sql: "
+CREATE TABLE ai_step_v3 (
+    task_id TEXT NOT NULL REFERENCES ai_task(id),
+    n INTEGER NOT NULL,
+    capability TEXT NOT NULL,
+    phase TEXT NOT NULL CHECK (phase IN ('read', 'prepare', 'apply')),
+    input_hash TEXT NOT NULL,
+    fingerprint TEXT,
+    result TEXT NOT NULL CHECK (result IN ('started', 'ok', 'invalid', 'needs_person', 'failed', 'stale', 'uncertain', 'not_applied')),
+    started_ms INTEGER NOT NULL,
+    ended_ms INTEGER,
+    PRIMARY KEY (task_id, n)
+);
+INSERT INTO ai_step_v3 (task_id, n, capability, phase, input_hash, result, started_ms, ended_ms)
+    SELECT task_id, n, capability, phase, input_hash, result, started_ms, ended_ms FROM ai_step;
+DROP TABLE ai_step;
+ALTER TABLE ai_step_v3 RENAME TO ai_step;
+ALTER TABLE ai_approval ADD COLUMN input_hash TEXT;
+UPDATE ai_approval SET input_hash = fingerprint;
+",
+    },
 ];
 
 /// Applies the migrations of the platform that the database does not have yet.
@@ -175,10 +201,13 @@ pub fn last_outcome(conn: &Connection, id: &str) -> rusqlite::Result<Option<Outc
 
 // ------------------------------------------------------------------ steps
 
-pub fn start_step(conn: &Connection, task: &str, n: u32, capability: &str, phase: Phase, hash: &str, now: i64) -> rusqlite::Result<()> {
+/// A step about to run. An apply keeps the fingerprint of what it applies, to ask the kernel later.
+#[allow(clippy::too_many_arguments)]
+pub fn start_step(conn: &Connection, task: &str, n: u32, capability: &str, phase: Phase, hash: &str, fingerprint: Option<&str>, now: i64) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO ai_step (task_id, n, capability, phase, input_hash, result, started_ms) VALUES (?1, ?2, ?3, ?4, ?5, 'started', ?6)",
-        params![task, n, capability, phase.as_str(), hash, now],
+        "INSERT INTO ai_step (task_id, n, capability, phase, input_hash, fingerprint, result, started_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'started', ?7)",
+        params![task, n, capability, phase.as_str(), hash, fingerprint, now],
     )?;
     Ok(())
 }
@@ -188,56 +217,82 @@ pub fn end_step(conn: &Connection, task: &str, n: u32, result: &'static str, now
     Ok(())
 }
 
-/// Whether the task already ran this capability, in this phase, with this same input.
-pub fn seen(conn: &Connection, task: &str, capability: &str, phase: Phase, hash: &str) -> rusqlite::Result<bool> {
+/// Whether the task already ran this capability, in this phase, with this same input; an apply, with this same
+/// fingerprint too: the same input applied on a proposal prepared again is not a repeat.
+pub fn seen(conn: &Connection, task: &str, capability: &str, phase: Phase, hash: &str, fingerprint: Option<&str>) -> rusqlite::Result<bool> {
     conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM ai_step WHERE task_id = ?1 AND capability = ?2 AND phase = ?3 AND input_hash = ?4)",
-        params![task, capability, phase.as_str(), hash],
+        "SELECT EXISTS(SELECT 1 FROM ai_step
+                       WHERE task_id = ?1 AND capability = ?2 AND phase = ?3 AND input_hash = ?4 AND fingerprint IS ?5)",
+        params![task, capability, phase.as_str(), hash, fingerprint],
         |r| r.get(0),
     )
 }
 
-/// An `apply` that started and never said how it ended: the app closed or failed while it ran.
-pub fn unfinished_apply(conn: &Connection, task: &str) -> rusqlite::Result<Option<(u32, String)>> {
+/// An `apply` that started and never said how it ended.
+pub struct Unfinished {
+    pub n: u32,
+    pub capability: String,
+    /// What it was applying; none if it was not a change of the kernel's.
+    pub fingerprint: Option<String>,
+}
+
+/// The `apply` that started and never said how it ended: the app closed or failed while it ran.
+pub fn unfinished_apply(conn: &Connection, task: &str) -> rusqlite::Result<Option<Unfinished>> {
     conn.query_row(
-        "SELECT n, capability FROM ai_step WHERE task_id = ?1 AND phase = 'apply' AND result = 'started' ORDER BY n DESC LIMIT 1",
+        "SELECT n, capability, fingerprint FROM ai_step
+         WHERE task_id = ?1 AND phase = 'apply' AND result = 'started' ORDER BY n DESC LIMIT 1",
         [task],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok(Unfinished { n: r.get(0)?, capability: r.get(1)?, fingerprint: r.get(2)? }),
     )
     .optional()
 }
 
 // ------------------------------------------------------------------ approvals
 
-/// Asks for an approval. Any other one still waiting in the task is stale now: its input is no longer the one.
-pub fn ask_approval(conn: &Connection, task: &str, fingerprint: &str, capability: &str, input: &Value, proposal: &Value, now: i64) -> rusqlite::Result<()> {
+/// Asks for an approval, tied to `fingerprint` (the proposal's) and to `input_hash` (the input's). Any other one still
+/// waiting in the task is stale now: its input is no longer the one.
+#[allow(clippy::too_many_arguments)]
+pub fn ask_approval(
+    conn: &Connection,
+    task: &str,
+    fingerprint: &str,
+    input_hash: &str,
+    capability: &str,
+    input: &Value,
+    proposal: &Value,
+    now: i64,
+) -> rusqlite::Result<()> {
     conn.execute("UPDATE ai_approval SET state = 'stale' WHERE task_id = ?1 AND state = 'pending'", [task])?;
     conn.execute(
-        "INSERT OR REPLACE INTO ai_approval (task_id, fingerprint, capability, input_json, proposal_json, state, asked_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
-        params![task, fingerprint, capability, to_json(input)?, to_json(proposal)?, now],
+        "INSERT OR REPLACE INTO ai_approval (task_id, fingerprint, input_hash, capability, input_json, proposal_json, state, asked_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
+        params![task, fingerprint, input_hash, capability, to_json(input)?, to_json(proposal)?, now],
     )?;
     Ok(())
 }
 
 /// The approval the task waits for.
 pub struct Pending {
+    /// What the person approves: for a modification, the fingerprint of the kernel's proposal.
     pub fingerprint: String,
+    /// The fingerprint of the capability and its input, to know the same input asked again.
+    pub input_hash: String,
     pub capability: String,
     pub input: Value,
     pub proposal: Value,
 }
 
 pub fn pending_approval(conn: &Connection, task: &str) -> rusqlite::Result<Option<Pending>> {
-    let row: Option<(String, String, String, String)> = conn
+    let row: Option<(String, String, String, String, String)> = conn
         .query_row(
-            "SELECT fingerprint, capability, input_json, proposal_json FROM ai_approval WHERE task_id = ?1 AND state = 'pending'",
+            "SELECT fingerprint, input_hash, capability, input_json, proposal_json FROM ai_approval
+             WHERE task_id = ?1 AND state = 'pending'",
             [task],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?;
-    row.map(|(fingerprint, capability, input, proposal)| {
-        Ok(Pending { fingerprint, capability, input: from_json(&input)?, proposal: from_json(&proposal)? })
+    row.map(|(fingerprint, input_hash, capability, input, proposal)| {
+        Ok(Pending { fingerprint, input_hash, capability, input: from_json(&input)?, proposal: from_json(&proposal)? })
     })
     .transpose()
 }
