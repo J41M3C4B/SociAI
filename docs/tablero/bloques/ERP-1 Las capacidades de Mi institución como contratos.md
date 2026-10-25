@@ -27,7 +27,7 @@ Es la primera capacidad real que corre por la plataforma.
 
 ## Terminado cuando
 
-Aprobado por el líder el 2026-10-24. Las decisiones D1 a D4 del «Plan» las confirma el líder antes de construir.
+Aprobado por el líder el 2026-10-24, con las decisiones D1 a D4 del «Plan» como se recomendaban.
 
 - [ ] Mi institución es un módulo con la forma de la §4 del plano y pasa la prueba de conformidad, incluidas sus capacidades.
 - [ ] El registro descubre sus capacidades, cada una con su efecto, su permiso y las clases de datos que toca, sacadas del diccionario.
@@ -78,7 +78,7 @@ Aprobado por el líder el 2026-10-24. Las decisiones D1 a D4 del «Plan» las co
 10. **La prueba de conformidad** revisa también las capacidades de cada módulo registrado: la muestra y Mi institución.
 11. **La suite completa y el PR.** El plano del ERP lleva su fila en «Ajustes» si algo de esto lo precisa.
 
-**Las decisiones del líder** (recomendación en cada una):
+**Las decisiones del líder** (2026-10-24: las cuatro, como se recomendaban):
 - **D1 · Alcance:** solo el perfil, como arriba. Las listas protegidas y el expediente, en bloques propios.
 - **D2 · El escáner al guardar:** hoy el texto libre del perfil pasa por el escáner antes de guardarse. El módulo no lo conoce, porque el escáner es de la plataforma de IA (P10). Se recomienda que la app lo siga pasando antes de llamar al módulo, hasta que el riel IA lo lleve a P10. Así no baja la protección.
 - **D3 · Borrador y confirmado:** hoy cada confirmación congela una versión del perfil, y antes de terminar el primer inicio el perfil es un borrador. Con el núcleo, cada cambio aplicado ya es una versión con su historial. Se recomienda retirar el borrador y la confirmación: lo guardado vale. Quien hoy lee «confirmado» (la hoja de la IA, la etapa de un proyecto) lee «primer inicio terminado».
