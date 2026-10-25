@@ -37,7 +37,7 @@ mod sample {
 
     pub fn preview(_: &Call, ask: Rename) -> Result<Change, CapabilityError> {
         if ask.name.trim().is_empty() {
-            return Err(CapabilityError::NeedsPerson { what: "the new name" });
+            return Err(CapabilityError::needs("sample.name", ["name"]));
         }
         Ok(Change { from: "Old".into(), to: ask.name })
     }
@@ -123,7 +123,7 @@ fn a_capability_runs_over_json_with_its_call() {
     assert_eq!((apply.call)(&mut call, json!({ "name": "Nuevo" })).unwrap(), json!({ "from": "account-1", "to": "Nuevo" }));
     assert_eq!(
         (prepare.call)(&call, json!({ "name": " " })),
-        Err(CapabilityError::NeedsPerson { what: "the new name" })
+        Err(CapabilityError::NeedsPerson { entity: "sample.name", fields: vec!["name"] })
     );
 }
 

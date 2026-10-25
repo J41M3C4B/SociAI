@@ -6,7 +6,7 @@ use std::cell::Cell;
 
 use capability::Registry;
 use kernel::Modules;
-use platform::outcome::Body;
+use platform::outcome::{Ask, Body};
 use platform::request::{Channel, Content};
 use platform::task::TaskState;
 use platform::{Accounts, Clock, Deliver, Outcome, Request, Runtime, Who};
@@ -67,8 +67,8 @@ fn moments(conn: &Connection, tasks: &[&str]) -> Vec<(String, Option<String>, Op
         .collect()
 }
 
-/// Every capability the app links asks for a permission the kernel or a module defines, and every modification
-/// prepares the kernel's proposal: the app starts.
+/// Every capability the app links asks for a permission the kernel or a module defines, every modification prepares
+/// the kernel's proposal, and every output names fields the dictionary has, within its `data`: the app starts.
 #[test]
 fn every_capability_asks_for_a_permission_that_exists() {
     let registry = Registry::discover().unwrap();
@@ -77,6 +77,7 @@ fn every_capability_asks_for_a_permission_that_exists() {
     assert!(registry.get("muestra.guardar_nota").is_some());
     assert_eq!(platform::unknown_permissions(&registry, &modules), vec![]);
     assert_eq!(platform::changes_without_proposal(&registry), vec![]);
+    assert_eq!(platform::outputs_outside_dictionary(&registry, &modules), vec![]);
 }
 
 #[test]
@@ -152,4 +153,43 @@ fn a_change_of_a_module_goes_through_the_kernel() {
     assert_eq!((origin.as_str(), task.as_str(), account.as_str()), ("task", asked.task.as_str(), ANA));
     assert!(!format!("{history:?}").contains("1234"), "{history:?}");
     assert!(moments(&conn, &[&asked.task]).contains(&("task.approved".into(), None, None)));
+}
+
+/// The fields of the dictionary in the platform (IA-8): what a capability of a module gives names its fields, with
+/// the class the catalog declares, and what it asks of the person is a field too, checked by the kernel.
+#[test]
+fn a_module_asks_and_gives_fields_of_the_dictionary() {
+    let modules = Modules::discover().unwrap();
+    let mut conn = opened(&modules);
+    let registry = Registry::discover().unwrap();
+    let ana = Ana(Cell::new("admin"));
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere };
+
+    // the class of each datum of an output is the catalog's: the capability does not write it
+    let classes = |id: &str| {
+        let mut fields: Vec<(String, &str)> =
+            platform::output_fields(registry.get(id).unwrap(), &modules).unwrap().into_iter().map(|f| (f.field, f.class)).collect();
+        fields.sort();
+        fields
+    };
+    assert_eq!(classes("muestra.leer_nota"), [("muestra.note.body".into(), "internal"), ("muestra.note.title".into(), "internal")]);
+    assert_eq!(classes("muestra.contacto_de_nota"), [("muestra.note.phone".into(), "personal"), ("muestra.note.title".into(), "internal")]);
+
+    // a note without a phone: the module says the phone is missing, and the platform asks for it with its kind
+    let id = kernel::new_id("nota");
+    let note = muestra::contract::NoteInput { id: id.clone(), title: "Llamar a la donante".into(), body: None, phone: None };
+    muestra::service::apply(&mut conn, &note, None, &kernel::Origin::Person { account: ANA.into() }).unwrap();
+    let asked = submit(&runtime, &mut conn, None, Content::Invoke { capability: "muestra.contacto_de_nota".into(), input: json!({ "id": id }) });
+    let Body::Clarification { ask: Ask::Missing { fields }, .. } = &asked.body else { panic!("{asked:?}") };
+    let asked_for: Vec<(&str, &serde_json::Value)> = fields.iter().map(|f| (f.id.as_str(), &f.field["kind"])).collect();
+    assert_eq!(asked_for, [("muestra.note.phone", &json!("phone"))]);
+
+    // what is not a phone does not pass the kernel, and is asked again with its code
+    let again = submit(&runtime, &mut conn, Some(&asked.task), Content::Answer { values: json!({ "muestra.note.phone": "mañana" }) });
+    let Body::Clarification { ask: Ask::Missing { fields }, .. } = &again.body else { panic!("{again:?}") };
+    assert_eq!(fields[0].reason.as_deref(), Some("not_a_phone"));
+
+    let done = submit(&runtime, &mut conn, Some(&asked.task), Content::Answer { values: json!({ "muestra.note.phone": "55 1234 5678" }) });
+    assert_eq!(done.state, TaskState::Done, "{done:?}");
+    assert_eq!(done.body, Body::Data { capability: "muestra.contacto_de_nota".into(), value: json!({ "title": "Llamar a la donante", "phone": "55 1234 5678" }) });
 }

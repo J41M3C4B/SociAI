@@ -35,10 +35,16 @@ pub fn run() {
                 .map_err(|errors| errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))?;
             // the modules of the ERP, and the catalog of permissions they and the kernel define (K2, K12): a
             // capability that asks for a permission nobody defines stops the app too (ADR-003 A2), and so does a
-            // modification that does not prepare the kernel's proposal (ERP-9)
+            // modification that does not prepare the kernel's proposal (ERP-9), and an output that names a field the
+            // dictionary does not have or one of a class outside its `data` (ADR-003 A5)
             let modules = kernel::Modules::discover()
                 .map_err(|errors| errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))?;
-            let faults = [platform::unknown_permissions(&registry, &modules), platform::changes_without_proposal(&registry)].concat();
+            let faults = [
+                platform::unknown_permissions(&registry, &modules),
+                platform::changes_without_proposal(&registry),
+                platform::outputs_outside_dictionary(&registry, &modules),
+            ]
+            .concat();
             if !faults.is_empty() {
                 return Err(faults.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n").into());
             }

@@ -837,7 +837,7 @@ export type RuntimeContent =
   /** A screen names the capability and its input: no router, no model. */
   | { kind: "invoke"; capability: string; input: Record<string, unknown> }
   | { kind: "text"; text: string }
-  /** The answer to what a paused task asked: the values join its input. */
+  /** The answer to what a paused task asked: the values join its input; to fields, under each full id. */
   | { kind: "answer"; values: Record<string, unknown> }
   /** Approve or reject the proposal with this fingerprint. */
   | { kind: "decision"; fingerprint: string; approve: boolean };
@@ -848,7 +848,30 @@ export interface RuntimeRequest {
   content: RuntimeContent;
 }
 export type TaskState = "running" | "paused" | "done" | "denied" | "limit" | "error";
-export type OutcomeAsk = { kind: "missing"; what: string } | { kind: "correct"; field: string; reason: string };
+/** A field of the data dictionary (K3), as the kernel describes it: the question is drawn from it. */
+export interface DictionaryField {
+  /** Its id in its entity. */
+  id: string;
+  kind: "text" | "long_text" | "number" | "money" | "year" | "date" | "select" | "multi_select" | "yes_no" | "email" | "phone";
+  /** The codes of a select or a multi-select. */
+  options: string[];
+  presence: "optional" | "expected" | "mandatory";
+  applies_when: { when: "always" } | { when: "filled"; field: string } | { when: "any_of"; field: string; values: string[] };
+  class: string;
+  min: number | null;
+  max: number | null;
+  max_len: number | null;
+  rule: "postal_code" | "rfc_moral" | "clabe" | "place_name" | null;
+}
+/** A field the person is asked for. The answer gives its value under `id`. */
+export interface OutcomeAsked {
+  /** Its full id: `muestra.note.phone`; its words live in `es-MX.ts` under it. */
+  id: string;
+  field: DictionaryField;
+  /** Why the last answer did not pass, as the kernel's code; null the first time. */
+  reason: string | null;
+}
+export type OutcomeAsk = { kind: "missing"; fields: OutcomeAsked[] } | { kind: "correct"; field: string; reason: string };
 /** Why a proposal is asked for once more. */
 export type OutcomeAgain = "changed" | "outdated" | "data_changed";
 /** The way to go on after an error: an error never blocks. */

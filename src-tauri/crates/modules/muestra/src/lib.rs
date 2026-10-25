@@ -4,8 +4,8 @@
 //!
 //! It grows with the kernel: ERP-9 prepares and applies its changes, and ERP-2 declares its part of the dictionary,
 //! with which the kernel validates a note and protects its phone. Its capabilities have permissions of its own: a
-//! query came with IA-5, and the change of a note through the kernel with IA-7. ERP-1 adds them to the conformance
-//! test.
+//! query came with IA-5, the change of a note through the kernel with IA-7, and with IA-8 their outputs name their
+//! fields of the dictionary and a query asks the person for the phone. ERP-1 adds them to the conformance test.
 
 pub mod capabilities;
 pub mod catalog;

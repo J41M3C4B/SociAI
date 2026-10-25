@@ -41,10 +41,23 @@ pub enum Body {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Ask {
-    /// Something only the person knows. With ERP-2 it names fields of the dictionary, with their options.
-    Missing { what: String },
-    /// A value to correct: which field and why.
+    /// Something only the person knows, as fields of the dictionary (K3), each with its kind and options. The answer
+    /// gives each value under the full id of its field, and the kernel checks it before the task goes on.
+    Missing { fields: Vec<Asked> },
+    /// A value of the input to correct: which field and why.
     Correct { field: String, reason: String },
+}
+
+/// One field of the dictionary that the person is asked for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Asked {
+    /// Its full id: `muestra.note.phone`. Its words live in `src/i18n/es-MX.ts` under it.
+    pub id: String,
+    /// How the dictionary describes it (`kernel::Field`): its kind, its options, whether it is needed, when it
+    /// applies and its limits. The question is drawn from it.
+    pub field: Value,
+    /// Why the last answer did not pass, as the kernel's code (`not_a_phone`); none the first time it is asked.
+    pub reason: Option<String>,
 }
 
 /// Why a proposal is asked for once more.

@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use capability::{Approval, Call, Capability, CapabilityError, Effect, Run};
 use kernel::{Proposal, TaskEvent, TaskMoment};
 
+use super::dictionary;
 use super::outcome::{Again, Ask, Body, Next, Outcome};
 use super::request::{Channel, Content, Request};
 use super::store;
@@ -185,7 +186,29 @@ impl Runtime<'_> {
             return self.close(conn, task, TaskState::Error, "unknown_capability", 0, error("unknown_capability", Next::TryLater));
         };
         let mut input = waiting.input;
-        if let (Some(into), Value::Object(from)) = (input.as_object_mut(), values) {
+        let from = if waiting.asked.is_empty() {
+            match values {
+                Value::Object(from) => from,
+                _ => Default::default(),
+            }
+        } else {
+            // fields of the dictionary: the kernel checks the answer before anything runs
+            match dictionary::answered(self.modules, &waiting.asked, &input, &values) {
+                Ok(answer) => answer,
+                Err(problems) => {
+                    task.corrections += 1;
+                    if task.corrections > task.limits().corrections {
+                        return self.limit(conn, task, Reached::Corrections);
+                    }
+                    let Some(fields) = dictionary::asked(cap, self.modules, &waiting.asked, &problems) else {
+                        return self.close(conn, task, TaskState::Error, "bad_output", 0, error("bad_output", Next::TryLater));
+                    };
+                    // the same fields are asked again, each with what did not pass
+                    return self.pause_for_person(conn, task, cap, waiting.phase, input, 0, Ask::Missing { fields }, false);
+                }
+            }
+        };
+        if let Some(into) = input.as_object_mut() {
             into.extend(from);
         }
         if waiting.correction {
@@ -290,9 +313,15 @@ impl Runtime<'_> {
                 self.ended(conn, task, n, cap.id, "invalid")?;
                 return self.pause_for_person(conn, task, cap, phase, input, n, Ask::Correct { field: field.into(), reason: reason.into() }, true);
             }
-            Err(CapabilityError::NeedsPerson { what }) => {
+            Err(CapabilityError::NeedsPerson { entity, fields }) => {
+                let ids: Vec<String> = fields.iter().map(|f| format!("{entity}.{f}")).collect();
+                // what it asks has to be in the dictionary and within its `data`, or it is outside its contract
+                let Some(fields) = dictionary::asked(cap, self.modules, &ids, &[]) else {
+                    self.ended(conn, task, n, cap.id, "failed")?;
+                    return self.close(conn, task, TaskState::Error, "bad_output", n, error("bad_output", Next::TryLater));
+                };
                 self.ended(conn, task, n, cap.id, "needs_person")?;
-                return self.pause_for_person(conn, task, cap, phase, input, n, Ask::Missing { what: what.into() }, false);
+                return self.pause_for_person(conn, task, cap, phase, input, n, Ask::Missing { fields }, false);
             }
             Err(CapabilityError::Stale) if phase == Phase::Apply => {
                 self.ended(conn, task, n, cap.id, "stale")?;
@@ -328,7 +357,7 @@ impl Runtime<'_> {
                 let now = self.clock.now_ms();
                 // the pause that follows says it in the trail: paused, waiting for the approval
                 store::ask_approval(conn, &task.id, &to_approve, &hash, cap.id, &input, &value, now)?;
-                task.waiting = Some(Waiting { capability: cap.id.into(), phase: Phase::Apply, input, correction: false });
+                task.waiting = Some(Waiting { capability: cap.id.into(), phase: Phase::Apply, input, correction: false, asked: vec![] });
                 let body = Body::Proposal { capability: cap.id.into(), proposal: value, fingerprint: to_approve, again };
                 self.pause(conn, task, Pause::Approval, "approval", n, body)
             }
@@ -375,7 +404,11 @@ impl Runtime<'_> {
         // a change never resumes at its apply: what the person adds changes the input, so it is prepared and
         // approved again (the blueprints §3.5)
         let phase = if phase == Phase::Apply { Phase::Prepare } else { phase };
-        task.waiting = Some(Waiting { capability: cap.id.into(), phase, input, correction });
+        let asked = match &ask {
+            Ask::Missing { fields } => fields.iter().map(|f| f.id.clone()).collect(),
+            Ask::Correct { .. } => vec![],
+        };
+        task.waiting = Some(Waiting { capability: cap.id.into(), phase, input, correction, asked });
         self.pause(conn, task, Pause::Person, "needs_person", n, Body::Clarification { capability: cap.id.into(), ask })
     }
 
