@@ -2,12 +2,12 @@
 tipo: bloque
 id: IA-8
 carril: ia
-estado: en-curso
+estado: revision
 prioridad: media
 caja: Entrega de resultados; Política de datos
 pedido_por: ERP-2
 acuerdo: tecnico
-depende_de: ERP-2
+depende_de: ERP-2, IA-7
 rama: ia/ia-8-campos-del-diccionario
 adr:
 creado: 2026-10-23
@@ -53,18 +53,22 @@ Sin ADR: lo decidieron A5 y la §6 del plano de la IA.
 
 ## Cómo probarlo
 
+PR #32. Se fusiona después del #30 (IA-7) y del #29 (ERP-2), que su rama trae dentro.
+
 **Cómo correrlo:**
-- Carpeta y rama:
-- Antes:
-- Arrancar:
-- Al terminar:
+- Carpeta y rama: `D:\Agente Proyectos\sociai-ia`, `ia/ia-8-campos-del-diccionario`.
+- Antes: nada.
+- Arrancar: `cargo test` desde `src-tauri`, en PowerShell; después, `pnpm tauri dev` desde la carpeta.
+- Al terminar: cerrar la app.
 
 **Qué hacer y qué debe pasar:**
 
-- [ ] 
+- [ ] `cargo test` pasa completo. Las pruebas de IA-8 están en `crates/platform/src/tests.rs` (las que hablan del diccionario, de los campos y de la respuesta) y en `src/platform_tests.rs` (`a_module_asks_and_gives_fields_of_the_dictionary`, con el módulo de muestra).
+- [ ] `pnpm tauri dev` arranca. La revisión nueva al arrancar no encuentra ninguna capacidad fuera del diccionario. En las pantallas no cambia nada: dibujar la aclaración es del riel de diseño.
 
 ## Hallazgos
 
 - Cómo se dibuja en el chat la aclaración con las opciones del campo es del riel de diseño. IA-8 solo la entrega en el contrato común de resultados (§6 del plano de la IA).
+- Juntar IA-7 con ERP-2 rompe las pruebas de la plataforma. Causa: ERP-2 cambió `kernel::propose`, que ahora recibe la entidad, y `Draft` ya no lleva `protected`; el módulo de prueba de IA-7 usaba la forma vieja. Ya está corregido en esta rama. Si ERP-2 se fusiona antes que IA-7, el #30 necesita la misma corrección en su `rebase`, y es del riel IA.
 
 ## Resultado
