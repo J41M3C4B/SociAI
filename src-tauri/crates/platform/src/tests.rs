@@ -11,12 +11,14 @@ use capability::Registry;
 use kernel::Modules;
 
 /// A module as any other would be, with the capabilities the tests need. It keeps a name in a table of its own, and
-/// changes it on the kernel (ERP-9), like every module.
+/// changes it on the kernel (ERP-9), like every module, and its part of the dictionary (K3) checks the name.
 pub mod trial {
     use capability::{Call, CapabilityError, Limits};
-    use kernel::{Applied, Changeable, Draft, Invalid, Origin, Proposal, Ref};
+    use kernel::{Applied, Changeable, Draft, Entity, Field, Kind, Origin, Proposal, Ref};
     use rusqlite::Connection;
     use serde_json::{json, Map, Value};
+
+    pub const NAME: Entity = Entity { id: "name", fields: &[Field::new("name", Kind::Text, "public").mandatory().max_len(40)] };
 
     #[derive(serde::Deserialize, schemars::JsonSchema)]
     pub struct Nothing {}
@@ -62,16 +64,11 @@ pub mod trial {
     impl Changeable for SetName {
         fn prepare(&self, conn: &Connection) -> rusqlite::Result<Proposal> {
             let (now, version) = current(conn)?;
-            let invalid = if self.name.chars().count() > 40 { vec![Invalid::new("name", "too_long")] } else { vec![] };
-            Ok(kernel::propose(Draft {
-                entity: Ref::new("trial", "name", "1"),
-                version,
-                before: Some(fields(&now)),
-                after: fields(&self.name),
-                protected: &[],
-                invalid,
-                input: &self.input,
-            }))
+            // the dictionary checks the name (ERP-2): nothing is left that only the module can check
+            Ok(kernel::propose(
+                &NAME,
+                Draft { entity: Ref::new("trial", "name", "1"), version, before: Some(fields(&now)), after: fields(&self.name), invalid: vec![], input: &self.input },
+            ))
         }
 
         fn version(&self, conn: &Connection) -> rusqlite::Result<i64> {
