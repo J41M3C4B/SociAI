@@ -172,7 +172,7 @@ La columna «sin condiciones verificadas» queda para un proveedor nuevo, hasta 
 **Lo que toca de otros rieles:**
 - **ERP:**
   - Sus pantallas usan el escáner por `crate::scanner`, y su código no cambia.
-  - El comentario de `kernel::CLASSES` («las definitivas vienen con el ADR del IA-3») pasa a nombrar el ADR-004. Es un pedido técnico.
+  - El comentario de `kernel::CLASSES` («las definitivas vienen con el ADR del IA-3») pasa a nombrar el ADR-004. Lo cambia el riel IA en este PR: es un pedido técnico del riel ERP, acordado el 2026-10-25 (§4 del modelo de trabajo).
   - Si un rol llega a ver menos clases, eso es de K2.
 - **Diseño:**
   - dibujar `withheld` en la pantalla;
