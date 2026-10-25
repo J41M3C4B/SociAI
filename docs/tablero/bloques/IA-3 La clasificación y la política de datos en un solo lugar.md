@@ -2,7 +2,7 @@
 tipo: bloque
 id: IA-3
 carril: ia
-estado: en-curso
+estado: revision
 prioridad: media
 caja: Clasificación de datos; Políticas de datos y PII
 pedido_por:
@@ -42,19 +42,19 @@ Incluye la regla del proveedor: los términos del plan gratuito de Gemini prohí
 Aprobado por el líder el 2026-10-25, con las decisiones C1 a C5 de abajo y su cambio a la C4. Las casillas se marcan cuando cada punto queda hecho.
 
 - [ ] **El ADR-004 fija las clases y su tabla:** las cinco clases que ya usa el diccionario, los destinos, las finalidades y qué permite cada combinación. El líder lo aprueba.
-- [ ] **La política es una sola decisión, en la plataforma** (`platform::policy`). Dada la clase, el destino y la finalidad, dice si el dato va, va tapado, va solo como agregado o no va. Es una tabla de datos, y una prueba la recorre completa sin modelo.
-- [ ] **Cada proveedor declara sus condiciones**, y la política las lee. Puede ser un encargado, o un proveedor sin condiciones verificadas. Ser encargado quiere decir que no entrena con lo que recibe, lo borra y lo guarda confidencial (LFPDPPP; Reglamento, art. 52).
+- [x] **La política es una sola decisión, en la plataforma** (`platform::policy`). Dada la clase, el destino y la finalidad, dice si el dato va, va tapado, va solo como agregado o no va. Es una tabla de datos, y una prueba la recorre completa sin modelo.
+- [x] **Cada proveedor declara sus condiciones**, y la política las lee. Puede ser un encargado, o un proveedor sin condiciones verificadas. Ser encargado quiere decir que no entrena con lo que recibe, lo borra y lo guarda confidencial (LFPDPPP; Reglamento, art. 52).
   - Anthropic y Gemini son encargados: en producción solo existen sus APIs de pago, que administra el líder.
   - SubQ es encargado, porque el líder revisó sus condiciones (C5). Su retención se configura al mínimo.
   - Un proveedor nuevo entra sin condiciones verificadas hasta que se revisen.
-- [ ] **Se aplica en los cuatro puntos del runtime:**
+- [x] **Se aplica en los cuatro puntos del runtime:**
   - **Previa:** el texto del chat pasa por el detector local antes de ir a un modelo. Con un proveedor sin condiciones verificadas, un texto con datos de personas no sale.
   - **Contexto:** lo que recibe un modelo solo lo arma la política (`ToModel`). El IA-4 no puede llamar a un modelo con otra cosa: no compila.
   - **Ejecución:** se deniega una capacidad que toca clases que la cuenta no ve (K2).
   - **Salida:** la salida de una capacidad se filtra campo por campo, según su destino. Lo tapado se restaura solo hacia la persona.
-- [ ] **Con un proveedor sin condiciones verificadas, no sale ningún dato interno, confidencial, personal ni sensible.** Hay pruebas en cada punto.
-- [ ] **Ninguna regla de qué ve la IA queda en un *prompt*.** El detector (el escáner de hoy) solo encuentra datos; la política decide.
-- [ ] `cargo test` y `pnpm test` pasan, sin red ni gasto.
+- [x] **Con un proveedor sin condiciones verificadas, no sale ningún dato interno, confidencial, personal ni sensible.** Hay pruebas en cada punto.
+- [x] **Ninguna regla de qué ve la IA queda en un *prompt*.** El detector (el escáner de hoy) solo encuentra datos; la política decide.
+- [x] `cargo test` y `pnpm test` pasan, sin red ni gasto.
 
 ## La propuesta
 
@@ -182,16 +182,32 @@ La columna «sin condiciones verificadas» queda para un proveedor nuevo, hasta 
 
 ## Cómo probarlo
 
+PR [#34](https://github.com/J41M3C4B/SociAI/pull/34). Si el #33 (ERP-1) entra antes, el riel IA hace el `rebase`.
+
 **Cómo correrlo:**
-- Carpeta y rama:
-- Antes:
-- Arrancar:
-- Al terminar:
+- **Carpeta y rama:** `D:\Agente Proyectos\sociai-ia`, `ia/ia-3-clases-y-politica`.
+- **Antes:** nada. La primera compilación tarda unos minutos más por el *crate* nuevo, `privacy`.
+- **Arrancar:**
+  1. `cargo test` desde `src-tauri`, en PowerShell.
+  2. `pnpm tauri dev` desde la carpeta.
+- **Al terminar:** cerrar la app.
 
 **Qué hacer y qué debe pasar:**
 
-- [ ] 
+- [ ] **`cargo test` pasa completo** (704 pruebas). Las del IA-3 están en tres lugares:
+  - `crates/platform/src/policy.rs`: la tabla del ADR, los dos tipos de proveedor, lo tapado que vuelve solo hacia la persona y el filtro de la salida;
+  - `crates/platform/src/tests.rs`: `the_chat_meets_the_policy_before_any_model` y `a_notice_hands_over_only_what_may_go_in_one`;
+  - `crates/privacy/src/vault.rs`: `a_value_of_the_dictionary_is_covered_whole`.
+- [ ] **`pnpm tauri dev` arranca igual que antes.** En las pantallas no cambia nada, porque los dos roles ven todas las clases.
+- [ ] **El ADR-004** (`docs/adr/ADR-004-las-clases-de-datos-y-la-politica.md`) dice lo que se aprobó: las cinco clases, los proveedores según sus condiciones, la tabla y sus reglas.
 
 ## Hallazgos
+
+- **La negativa por clase (`class_not_seen`) no se puede probar de punta a punta:** hoy ningún rol deja de ver una clase. Se prueba en la política (`may_touch`). Si K2 agrega un rol así, se agrega la prueba con él.
+- **Un RFC de una organización o una CLABE escritos en el chat detienen el texto,** también con un encargado. Es la tabla: lo `confidential` nunca va a un modelo, ni tapado. La persona usa la pantalla. Si se quiere que el chat los acepte tapados, es un cambio a la tabla, y por lo tanto un ADR nuevo.
+- **El detector de la plataforma no usa «frases seguras».** Un lugar con nombre de persona («Casa Hogar San José») se tapa como un nombre, o detiene el texto con un proveedor sin condiciones verificadas. Esas falsas alarmas se miden con la batería del IA-4.
+- **SubQ:** cuando entre al código como proveedor, se pide su retención cero (sin ella guarda a lo más 60 días) y se declara encargado.
+- **El aviso de privacidad** debe decir qué hacemos con los datos, incluido que un proveedor de IA los trata como encargado. Es del líder.
+- **El contacto de la institución como `confidential`** fue una decisión del ERP-1, no de esta propuesta. Con la tabla del ADR-004, ningún modelo lo verá. Lo decide el líder en el ERP-1.
 
 ## Resultado
