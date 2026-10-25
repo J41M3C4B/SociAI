@@ -50,7 +50,7 @@ pub(crate) fn totals(conn: &Connection) -> Result<ProfileTotals, ServiceError> {
     Ok(ProfileInput { staff, population, ..input }.totals(year))
 }
 
-/// Writes the new lines into the current version in place: it stays confirmed if it was (audit D1).
+/// Writes the new lines in place (audit D1).
 pub(crate) fn sync_profile(conn: &mut Connection) -> Result<Option<ProfileView>, ServiceError> {
     let (staff, population) = derive(conn)?;
     Ok(profile_store::refresh_lines(conn, &staff, &population)?.map(Into::into))

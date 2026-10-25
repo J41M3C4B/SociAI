@@ -2638,6 +2638,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "mi_institucion"
+version = "0.1.0"
+dependencies = [
+ "capability",
+ "kernel",
+ "mi_institucion-contract",
+ "rusqlite",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mi_institucion-contract"
+version = "0.1.0"
+dependencies = [
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "micromap"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4355,6 +4377,7 @@ dependencies = [
  "kernel",
  "keyring-core",
  "linkme",
+ "mi_institucion",
  "muestra",
  "pdfium-render",
  "platform",

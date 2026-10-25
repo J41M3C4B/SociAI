@@ -1750,6 +1750,9 @@ export const es = {
     number_too_small: "Este número es demasiado pequeño.",
     served_over_capacity: "Algo no cuadra: atienden a más personas de las que caben según la capacidad que puso.",
     required: "Este dato hace falta para guardar.",
+    too_long: "Este texto es demasiado largo. Acórtelo un poco.",
+    not_a_phone: "Revise el teléfono: escriba solo números, al menos 8.",
+    not_an_email: "Revise el correo: debe verse como nombre@dominio.org.",
     clabe_invalid: "Esa CLABE no es válida. Son 18 números; revise que estén completos.",
     clabe_repeated: "Esa cuenta ya está registrada.",
     valid_before_issued: "La vigencia no puede terminar antes de la fecha de emisión.",
@@ -1770,6 +1773,7 @@ export const es = {
       "Este archivo parece una lista de personas. Para cuidarlas, no lo guardamos. Si necesita esos datos para el proyecto, mejor escriba solo los totales (por ejemplo: «12 de 18 usan silla de ruedas»).",
     fieldNames: {
       notes: "Notas",
+      "institution.notes": "Notas",
       display_name: "Nombre del documento",
       text: "Texto del documento",
       "institution.mission": "A qué se dedica",

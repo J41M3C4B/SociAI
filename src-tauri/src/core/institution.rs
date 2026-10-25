@@ -5,10 +5,12 @@ pub mod forms;
 
 use rusqlite::{Connection, OptionalExtension};
 
-/// The kind of institution (`elderly_home`, `children_home`, …), or `None` before it is written. Nobody else reads it
-/// from the table: each module turns it into its own `Flavor` (`Flavor::from_kind`).
+/// The kind of institution (`elderly_home`, `children_home`, …), from whom it serves in the profile of Mi institución
+/// (ERP-1), or `None` before the profile is written. Each module turns it into its own `Flavor` (`Flavor::from_kind`).
 pub fn kind(conn: &Connection) -> Option<String> {
-    conn.query_row("SELECT kind FROM institution LIMIT 1", [], |r| r.get(0)).optional().ok().flatten()
+    let profile = mi_institucion::service::profile(conn).ok().filter(|p| p.version > 0)?;
+    let populations: Vec<String> = serde_json::from_value(profile.values.get("populations").cloned().unwrap_or_default()).unwrap_or_default();
+    Some(catalog::kind_of(&populations).to_string())
 }
 
 /// The id of the institution, which is the organization that owns this database (D4), or `None` before it is written.
@@ -39,10 +41,12 @@ mod tests {
     #[test]
     fn the_kind_is_read_once_for_every_module() {
         let dir = tempfile::tempdir().unwrap();
-        let conn = crate::storage::open_encrypted(&dir.path().join("t.db"), "k").unwrap();
+        let mut conn = crate::storage::open_encrypted(&dir.path().join("t.db"), "k").unwrap();
         assert_eq!(kind(&conn), None);
         assert_eq!(hr_flavor(&conn), crate::modules::hr::Flavor::Other);
-        conn.execute("INSERT INTO institution (id, name, kind, created_at, updated_at) VALUES ('i','Casa','children_home','t','t')", []).unwrap();
+        let identity = serde_json::json!({ "name": "Casa", "populations": ["childhood", "adolescence"] });
+        let origin = kernel::Origin::Calculated { rule: "fixtures".into() };
+        crate::core::profile::storage::save_window(&mut conn, "identity", identity.as_object().unwrap().clone(), &origin).unwrap();
         assert_eq!(kind(&conn).as_deref(), Some("children_home"));
         assert_eq!(care_flavor(&conn), crate::modules::care::Flavor::ChildrenHome);
         assert_eq!(facilities_flavor(&conn), crate::modules::facilities::Flavor::ChildrenHome);

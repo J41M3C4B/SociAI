@@ -78,6 +78,8 @@ tauri-plugin-dialog = "2.8.2"
 linkme = { workspace = true }
 # the JSON schema of a capability's input and output comes from its Rust type, never written by hand (ADR-001)
 schemars = { workspace = true }
+# the modules of the ERP the program has (ERP blueprint §4): Mi institución, the profile of the institution (ERP-1)
+mi_institucion = { path = "crates/modules/mi_institucion" }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

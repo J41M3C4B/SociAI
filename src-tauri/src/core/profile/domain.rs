@@ -118,7 +118,7 @@ pub struct InstitutionInput {
     #[serde(default)]
     pub attention: Option<Attention>,
     /// The data kept as fields of the catalog (ADR-033 §1), by field id (`institution.legal_name`); the columns are
-    /// in `storage::DETAILS`. `None` when the screen did not send them: what is saved stays.
+    /// in the module Mi institución (ERP-1). `None` when the screen did not send them: what is saved stays.
     #[serde(default)]
     pub details: Option<crate::common::forms::Values>,
 }
@@ -504,47 +504,6 @@ impl ProfileInput {
         }
         v
     }
-
-    /// Visits every free-text field that must be scanned (institutional contact data excluded).
-    pub fn for_each_text_mut(&mut self, f: &mut dyn FnMut(&str, &mut String)) {
-        fn opt(path: &str, o: &mut Option<String>, f: &mut dyn FnMut(&str, &mut String)) {
-            if let Some(s) = o {
-                f(path, s);
-            }
-        }
-        opt("institution.mission", &mut self.institution.mission, f);
-        // the municipality is not scanned: it is the name of a place (`Rule::PlaceName`), and many are named after a
-        // person («Benito Juárez», «Miguel Hidalgo»)
-        // the long texts of the catalog that may reach the AI (objeto social, services, admission); the address, the
-        // folios and the keys are the institution's own and are not scanned, like its contact
-        if let Some(d) = &mut self.institution.details {
-            for id in scanned_details() {
-                if let Some(serde_json::Value::String(text)) = d.get_mut(id) {
-                    f(id, text);
-                }
-            }
-        }
-        opt("notes", &mut self.notes, f);
-        for (i, g) in self.population.iter_mut().enumerate() {
-            f(&format!("population[{i}].label"), &mut g.label);
-            opt(&format!("population[{i}].notes"), &mut g.notes, f);
-        }
-        for (i, s) in self.staff.iter_mut().enumerate() {
-            f(&format!("staff[{i}].role"), &mut s.role);
-            opt(&format!("staff[{i}].shift"), &mut s.shift, f);
-            opt(&format!("staff[{i}].notes"), &mut s.notes, f);
-        }
-    }
-}
-
-/// The fields kept as details that the scanner reads before saving: the long texts that may reach the AI.
-fn scanned_details() -> impl Iterator<Item = &'static str> {
-    use crate::common::forms::{AiUse, FieldKind};
-    crate::core::institution::forms::FORMS
-        .iter()
-        .flat_map(|f| f.fields())
-        .filter(|f| f.kind == FieldKind::LongText && f.ai != AiUse::Never && crate::core::profile::storage::is_detail(f.id))
-        .map(|f| f.id)
 }
 
 #[cfg(test)]
@@ -753,18 +712,5 @@ mod tests {
         assert_eq!(codes, vec!["institution.populations".to_string(), "institution.sex_served".to_string()]);
         p.institution.attention = Some(Attention::of_kind(InstitutionKind::ChildrenHome));
         assert!(p.validate(2026).is_empty());
-    }
-
-    #[test]
-    fn text_visitor_skips_institutional_contact() {
-        let mut p = base();
-        p.institution.contact_phone = Some("55 1234 5678".into());
-        p.institution.legal_rep_name = Some("Rosa Hernández López".into());
-        p.institution.mission = Some("Cuidar".into());
-        let mut seen = Vec::new();
-        p.for_each_text_mut(&mut |path, _| seen.push(path.to_string()));
-        assert!(seen.contains(&"institution.mission".to_string()));
-        assert!(seen.contains(&"population[0].label".to_string()));
-        assert!(!seen.iter().any(|s| s.contains("contact") || s.contains("legal_rep") || s.contains("name")));
     }
 }

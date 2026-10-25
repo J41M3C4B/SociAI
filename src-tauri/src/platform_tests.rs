@@ -94,13 +94,14 @@ fn a_capability_of_a_module_runs_from_end_to_end() {
     muestra::service::apply(&mut conn, &note, None, &kernel::Origin::Person { account: ANA.into() }).unwrap();
     let read = || Content::Invoke { capability: "muestra.leer_nota".into(), input: json!({ "id": id }) };
 
-    // the direction does not have the permission the module defines: the kernel says no
+    // an account whose role the kernel does not know has no permission: the kernel says no
+    ana.0.set("contador");
     let denied = submit(&runtime, &mut conn, None, read());
     assert_eq!(denied.state, TaskState::Denied);
-    assert!(matches!(&denied.body, Body::Error { code, .. } if code == "access_denied"), "{denied:?}");
+    assert!(matches!(&denied.body, Body::Error { code, .. } if code == "unknown_role"), "{denied:?}");
 
-    // the administration does: the module reads the note, without its protected phone
-    ana.0.set("admin");
+    // the direction has the permissions of the modules (ERP-1): the module reads the note, without its protected phone
+    ana.0.set("manager");
     let done = submit(&runtime, &mut conn, None, read());
     assert_eq!(done.state, TaskState::Done, "{done:?}");
     let Body::Data { capability, value } = &done.body else { panic!("{done:?}") };
@@ -109,7 +110,7 @@ fn a_capability_of_a_module_runs_from_end_to_end() {
 
     // and the kernel's audit store tells the life of both tasks, for whom and why
     let moments = moments(&conn, &[&denied.task, &done.task]);
-    assert!(moments.contains(&("task.denied".into(), None, Some("access_denied".into()))), "{moments:?}");
+    assert!(moments.contains(&("task.denied".into(), None, Some("unknown_role".into()))), "{moments:?}");
     assert!(moments.contains(&("task.step".into(), Some("ok".into()), None)), "{moments:?}");
 }
 
@@ -128,9 +129,10 @@ fn a_change_of_a_module_goes_through_the_kernel() {
         input: json!({ "id": id, "title": "Primera nota", "body": null, "phone": "55 1234 5678" }),
     };
 
-    // the direction may not write notes
+    // an account whose role the kernel does not know may not write notes
+    ana.0.set("contador");
     let denied = submit(&runtime, &mut conn, None, save());
-    assert!(matches!(&denied.body, Body::Error { code, .. } if code == "access_denied"), "{denied:?}");
+    assert!(matches!(&denied.body, Body::Error { code, .. } if code == "unknown_role"), "{denied:?}");
 
     // the administration sees the proposal, with the protected phone for her, and approves it
     ana.0.set("admin");

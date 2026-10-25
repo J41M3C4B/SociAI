@@ -60,8 +60,8 @@ impl From<ServiceError> for UiError {
                 "El texto es muy largo. Intente con una parte más corta.",
             ),
             ServiceError::UnknownKind => UiError::new("unknown_kind", "No reconocemos ese tipo de documento."),
-            ServiceError::Storage(crate::storage::StorageError::NothingToConfirm) => {
-                UiError::new("nothing_to_confirm", "No hay cambios pendientes por confirmar.")
+            ServiceError::Storage(crate::storage::StorageError::Change("prepare_again")) => {
+                UiError::new("prepare_again", "Alguien más cambió estos datos mientras los editaba. Vuelva a abrir la ventana.")
             }
             ServiceError::NotFound => UiError::new("not_found", "No encontramos eso. Intente de nuevo."),
             ServiceError::Hr(crate::modules::hr::HrError::NotFound) => UiError::new("not_found", "No encontramos eso. Intente de nuevo."),

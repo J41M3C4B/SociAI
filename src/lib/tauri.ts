@@ -31,7 +31,6 @@ import type {
   Found,
   EditOutcome,
   NeedsView,
-  ProfileInput,
   ProfileView,
   DonorKind,
   FormValues,
@@ -68,9 +67,6 @@ export function toAppError(e: unknown): AppError {
 // Typed wrappers around invoke(). One function per Rust command.
 export const appInfo = () => invoke<AppInfo>("app_info");
 export const profileGet = () => invoke<ProfileView | null>("profile_get");
-export const profileSave = (input: ProfileInput, decision?: Decision) =>
-  invoke<SaveProfileOutcome>("profile_save", { input, decision: decision ?? null });
-export const profileConfirm = () => invoke<ProfileView>("profile_confirm");
 export const institutionOverview = () => invoke<InstitutionOverview>("institution_overview");
 // Forms of «Mi institución» described as data (ADR-033)
 export const formGet = (id: string) => invoke<FormView>("form_get", { id });

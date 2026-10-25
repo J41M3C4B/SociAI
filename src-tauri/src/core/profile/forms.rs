@@ -1,17 +1,22 @@
-//! The forms of «Mi institución» as the screen gets and saves them (ADR-033 §1): the description, the values and what
-//! is missing come from here, and a save goes the usual way (checks, scanner, confirmation). The screen never maps a
-//! field to the profile itself.
+//! The windows of «Mi institución» as the screen gets and saves them (ADR-033 §1): the description, the values, what is
+//! missing and where each datum comes from. They are the windows of the module Mi institución (ERP-1): its kernel
+//! validates a save, empties what no longer applies and keeps the history; the scanner reads the free texts first
+//! (D2). The screen never maps a field to the profile itself.
+
+use std::collections::BTreeMap;
 
 use crate::common::forms::{FormSpec, Values};
 use crate::core::error::ServiceError;
-use crate::core::institution::forms::form;
-use crate::core::profile::domain::{Attention, ProfileInput, ProfileIssue};
-use crate::core::profile::service::SaveProfileOutcome;
+use crate::core::history::FieldOrigin;
+use crate::core::institution::forms::{form, module_id, screen_id};
+use crate::core::profile::domain::ProfileInput;
+use crate::core::profile::service::{self, SaveProfileOutcome};
 use crate::core::profile::storage as store;
 use crate::scanner::guard::Decision;
+use mi_institucion::windows::{self, Window};
 use rusqlite::Connection;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Map, Value};
 
 /// A form ready to draw: its description, what is saved, where each saved datum comes from and what is still missing.
 #[derive(Debug, Serialize)]
@@ -21,88 +26,33 @@ pub struct FormView {
     /// The saved values of other windows its conditions and words look at (the ways it serves, for the capacity):
     /// the screen reads them, it does not save them.
     pub context: Values,
-    pub origins: std::collections::BTreeMap<String, crate::core::history::FieldOrigin>,
+    pub origins: BTreeMap<String, FieldOrigin>,
     pub missing: Vec<&'static str>,
-    /// The suggestions of the AI waiting in this form (IA4), but the ones that say what is already saved.
+    /// The suggestions waiting in this form (IA4), but the ones that say what is already saved.
     pub proposals: Vec<crate::core::proposals::Proposal>,
 }
 
-/// Every datum of the catalog the profile holds, by field id: what the history compares (ADR-033 §4).
+/// Every datum of the profile, by the id the screen gives it.
 pub fn catalog_values(p: &ProfileInput) -> Values {
-    crate::core::institution::forms::FORMS.iter().flat_map(|f| values_of(f.id, p)).collect()
+    store::values_of(p).into_iter().map(|(k, v)| (screen_id(&k), v)).collect()
 }
 
-fn text(v: Option<&Value>) -> Option<String> {
-    v.and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+/// The window of the module behind a form of the screen.
+fn window(id: &str) -> Result<&'static Window, ServiceError> {
+    id.strip_prefix(crate::core::institution::forms::PREFIX).and_then(windows::window).ok_or(ServiceError::NotFound)
 }
 
-fn list(v: Option<&Value>) -> Vec<String> {
-    v.and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
-}
-
-fn number(v: Option<&Value>) -> Option<i64> {
-    v.and_then(Value::as_i64)
-}
-
-/// The values of a form, read from the profile. The data that live as details go by their id
-/// (`storage::DETAILS`); the older columns are named here one by one.
-fn values_of(id: &str, p: &ProfileInput) -> Values {
-    let i = &p.institution;
-    let a = i.attention.clone().unwrap_or_default();
-    let mut v = Values::new();
-    let mut put = |field: &str, value: Value| {
-        v.insert(field.to_string(), value);
-    };
-    match id {
-        "institution.identity" => {
-            put("institution.name", json!(i.name));
-            put("institution.mission", json!(i.mission));
-            put("institution.populations", json!(a.populations));
-            put("institution.sex_served", json!(a.sex_served));
-            put("institution.modalities", json!(a.modalities));
-            put("institution.care_areas", json!(a.care_areas));
-        }
-        "institution.contact" => {
-            put("institution.contact_phone", json!(i.contact_phone));
-            put("institution.contact_email", json!(i.contact_email));
-            put("institution.state", json!(i.state));
-            put("institution.municipality", json!(i.municipality));
-        }
-        "institution.legal" => {
-            put("institution.legal_rfc", json!(i.legal_rfc));
-            put("institution.legal_rep_name", json!(i.legal_rep_name));
-            put("institution.legal_form", json!(i.legal_form));
-            put("institution.founded_year", json!(i.founded_year));
-            put("institution.authorized_donee", json!(i.authorized_donee));
-            put("institution.cluni", json!(i.cluni));
-        }
-        "institution.capacity" => {
-            put("institution.capacity_total", json!(p.capacity_total));
-            put("institution.served_estimate", json!(p.served_estimate));
-            put("institution.staff_paid_estimate", json!(p.staff_paid_estimate));
-            put("institution.staff_volunteer_estimate", json!(p.staff_volunteer_estimate));
-            put("institution.notes", json!(p.notes));
-        }
-        _ => {}
-    }
-    if let (Some(spec), Some(details)) = (form(id), &i.details) {
-        for f in spec.fields().filter(|f| store::is_detail(f.id)) {
-            if let Some(x) = details.get(f.id) {
-                v.insert(f.id.to_string(), x.clone());
-            }
-        }
-    }
-    v.retain(|_, x| crate::common::forms::is_filled(Some(x)));
-    v
+/// The saved data of the profile, by the module's ids.
+fn saved(conn: &Connection) -> Result<Map<String, Value>, ServiceError> {
+    Ok(mi_institucion::service::profile(conn)?.values)
 }
 
 /// The saved values of the fields of other windows a form looks at (`FormSpec::looks_outside`).
-fn context_of(spec: &FormSpec, p: &ProfileInput) -> Values {
-    let outside = spec.looks_outside();
-    if outside.is_empty() {
-        return Values::new();
-    }
-    catalog_values(p).into_iter().filter(|(id, _)| outside.contains(&id.as_str())).collect()
+fn context_of(spec: &FormSpec, values: &Map<String, Value>) -> Values {
+    spec.looks_outside()
+        .into_iter()
+        .filter_map(|id| Some((id.to_string(), values.get(module_id(id)?)?.clone())))
+        .collect()
 }
 
 /// A form's values with the context its conditions look at: what decides whether each field applies. The context
@@ -113,62 +63,29 @@ pub fn with_context(values: &Values, context: &Values) -> Values {
     all
 }
 
-/// Writes the values of a form into the profile. A field of the form left empty is emptied; the fields of the other
-/// forms stay as they are.
-fn apply(id: &str, v: &Values, p: &mut ProfileInput) {
-    let i = &mut p.institution;
-    match id {
-        "institution.identity" => {
-            i.name = text(v.get("institution.name")).unwrap_or_default();
-            i.mission = text(v.get("institution.mission"));
-            i.attention = Some(Attention {
-                populations: list(v.get("institution.populations")),
-                sex_served: text(v.get("institution.sex_served")),
-                modalities: list(v.get("institution.modalities")),
-                care_areas: list(v.get("institution.care_areas")),
-            });
-        }
-        "institution.contact" => {
-            i.contact_phone = text(v.get("institution.contact_phone"));
-            i.contact_email = text(v.get("institution.contact_email"));
-            i.state = text(v.get("institution.state"));
-            i.municipality = text(v.get("institution.municipality"));
-        }
-        "institution.legal" => {
-            // the RFC goes in capitals, as the SAT writes it
-            i.legal_rfc = text(v.get("institution.legal_rfc")).map(|r| r.to_uppercase());
-            i.legal_rep_name = text(v.get("institution.legal_rep_name"));
-            i.legal_form = text(v.get("institution.legal_form"));
-            i.founded_year = number(v.get("institution.founded_year"));
-            i.authorized_donee = text(v.get("institution.authorized_donee"));
-            i.cluni = text(v.get("institution.cluni"));
-        }
-        "institution.capacity" => {
-            p.capacity_total = number(v.get("institution.capacity_total"));
-            p.served_estimate = number(v.get("institution.served_estimate"));
-            p.staff_paid_estimate = number(v.get("institution.staff_paid_estimate"));
-            p.staff_volunteer_estimate = number(v.get("institution.staff_volunteer_estimate"));
-            p.notes = text(v.get("institution.notes"));
-        }
-        _ => {}
-    }
-    if let Some(spec) = form(id) {
-        let details = p.institution.details.get_or_insert_with(Values::new);
-        for f in spec.fields().filter(|f| store::is_detail(f.id)) {
-            match v.get(f.id) {
-                Some(x) if crate::common::forms::is_filled(Some(x)) => details.insert(f.id.to_string(), x.clone()),
-                _ => details.remove(f.id),
-            };
-        }
-    }
+/// Where a datum comes from, as the screen tells it: a person, a document and its page, a task of the platform the
+/// person accepted, or a calculation.
+fn origin_of(source: &mi_institucion::service::Source) -> FieldOrigin {
+    let (origin, source_ref) = match &source.origin {
+        kernel::Origin::Person { .. } => ("user", None),
+        kernel::Origin::Document { document, page, .. } => ("document", Some(serde_json::json!({ "document_id": document, "page": page }).to_string())),
+        kernel::Origin::Task { .. } => ("ai_assumption", None),
+        kernel::Origin::Calculated { .. } => ("computed", None),
+    };
+    FieldOrigin { origin: origin.into(), source_ref, confirmed_at: Some(source.at.clone()) }
 }
 
 pub fn get(conn: &Connection, id: &str) -> Result<FormView, ServiceError> {
     let spec = form(id).ok_or(ServiceError::NotFound)?;
-    let profile = store::load_current(conn)?.map(|p| p.input).unwrap_or_default();
-    let values = values_of(id, &profile);
-    let origins = crate::core::history::origins(conn, &values)?;
-    // what a document suggests shows only while its field is empty (ADR-038); what the AI proposes, while it differs
+    let w = window(id)?;
+    let all = saved(conn)?;
+    let values: Values = all.iter().filter(|(k, _)| w.has(k)).map(|(k, v)| (screen_id(k), v.clone())).collect();
+    let origins = mi_institucion::service::origins(conn)?
+        .iter()
+        .filter(|(k, _)| w.has(k) && all.contains_key(*k))
+        .map(|(k, s)| (screen_id(k), origin_of(s)))
+        .collect();
+    // what a document suggests shows only while its field is empty (ADR-038); any other suggestion, while it differs
     let proposals = crate::core::proposals::pending(conn, id, None)?
         .into_iter()
         .filter(|p| match p.origin {
@@ -178,336 +95,90 @@ pub fn get(conn: &Connection, id: &str) -> Result<FormView, ServiceError> {
         .collect();
     // a quick figure the records of a module already answer is not missing (ADR-031 §3: the records win)
     let answered = crate::core::onboarding::service::answered(conn)?;
-    let context = context_of(spec, &profile);
-    let missing = spec.missing(&with_context(&values, &context)).into_iter().filter(|f| !answered.contains(f)).collect();
-    Ok(FormView { spec, missing, origins, values, context, proposals })
+    let missing = mi_institucion::catalog::PROFILE
+        .missing(&all)
+        .into_iter()
+        .filter(|f| w.has(f))
+        .filter_map(|f| spec.field(&screen_id(f)).map(|s| s.id))
+        .filter(|f| !answered.contains(f))
+        .collect();
+    Ok(FormView { spec, context: context_of(spec, &all), values, origins, missing, proposals })
 }
 
-/// The values of a form as saved now, by field id: what the Capturist must not propose again.
+/// The values of a form as saved now, by field id: what a suggestion must not propose again.
 pub fn saved_values(conn: &Connection, id: &str) -> Result<Values, ServiceError> {
-    let profile = store::load_current(conn)?.map(|p| p.input).unwrap_or_default();
-    Ok(values_of(id, &profile))
+    Ok(get(conn, id)?.values)
 }
 
 /// The saved values of other windows a form looks at, by field id (`FormView::context`).
 pub fn context(conn: &Connection, id: &str) -> Result<Values, ServiceError> {
     let spec = form(id).ok_or(ServiceError::NotFound)?;
-    let profile = store::load_current(conn)?.map(|p| p.input).unwrap_or_default();
-    Ok(context_of(spec, &profile))
+    Ok(context_of(spec, &saved(conn)?))
 }
 
 /// Saves a form. A value out of its list or range is refused with the field it belongs to; what is missing never
-/// stops the save. Then the profile goes the way of «Mi institución» (`save_profile_confirmed`).
+/// stops the save.
 pub fn save(conn: &mut Connection, id: &str, values: Values, decision: Option<Decision>) -> Result<SaveProfileOutcome, ServiceError> {
     save_using(conn, id, values, decision, &[])
 }
 
-/// As `save`, with the suggestions of the AI the person put in their fields (`used`, by id; IA4). Each one is marked
-/// accepted in the same transaction. A datum saved as the suggestion said keeps the origin of the suggestion; one the
-/// person corrected is the person's.
-pub fn save_using(conn: &mut Connection, id: &str, mut values: Values, decision: Option<Decision>, used: &[String]) -> Result<SaveProfileOutcome, ServiceError> {
-    let spec = form(id).ok_or(ServiceError::NotFound)?;
-    let mut profile = store::load_current(conn)?.map(|p| p.input).unwrap_or_default();
-    // a field may apply by what another window says; `clear_hidden` keeps only the fields of this one
-    values = with_context(&values, &context_of(spec, &profile));
-    spec.clear_hidden(&mut values);
-    let blocking: Vec<ProfileIssue> = spec
-        .validate(&values)
-        .into_iter()
-        .filter(|i| i.blocking)
-        .map(|i| ProfileIssue { code: i.code, field: i.field.to_string(), blocking: true })
-        .collect();
-    if !blocking.is_empty() {
-        return Ok(SaveProfileOutcome::Invalid { issues: blocking });
+/// The document and page a suggestion was read from (`source_ref` of the reader).
+fn read_from(p: &crate::core::proposals::Proposal) -> Option<(String, Option<i64>)> {
+    let source: Value = serde_json::from_str(p.source_ref.as_deref()?).ok()?;
+    Some((source.get("document_id")?.as_str()?.to_string(), source.get("page").and_then(Value::as_i64)))
+}
+
+/// As `save`, with the suggestions the person put in their fields (`used`, by id; IA4). The kernel keeps one origin per
+/// change: the data taken as a document said them are saved first, document by document and page by page, with the
+/// document as their origin; then the rest of the window, as the person's. A suggestion taken is marked accepted.
+pub fn save_using(conn: &mut Connection, id: &str, values: Values, decision: Option<Decision>, used: &[String]) -> Result<SaveProfileOutcome, ServiceError> {
+    form(id).ok_or(ServiceError::NotFound)?;
+    let w = window(id)?;
+    // only the fields of this window: what it sends of another one does not decide
+    let mut sent: Map<String, Value> = values.iter().filter_map(|(k, v)| Some((module_id(k)?, v)).filter(|(f, _)| w.has(f))).map(|(f, v)| (f.to_string(), v.clone())).collect();
+    if let Some(report) = service::scan(conn, &mut sent, decision)? {
+        return Ok(SaveProfileOutcome::Quarantine { report });
     }
-    apply(id, &values, &mut profile);
+    let person = service::origin(conn)?;
+    // what the whole save would do, before anything is written
+    let input = mi_institucion::contract::WindowInput { window: w.id.into(), values: sent.clone() };
+    let proposal = mi_institucion::service::prepare(conn, &input)?;
+    if !proposal.invalid.is_empty() {
+        return Ok(SaveProfileOutcome::Invalid { issues: proposal.invalid.iter().map(|i| service::issue(&i.field, &i.reason)).collect() });
+    }
     let taken = crate::core::proposals::waiting(conn, id, used)?;
-    let sources = taken
-        .iter()
-        .filter(|p| values.get(&p.field_id) == Some(&p.value))
-        .map(|p| (p.field_id.clone(), crate::core::history::Source { origin: p.origin.as_str(), source_ref: p.source_ref.clone() }))
-        .collect();
-    let ids: Vec<String> = taken.into_iter().map(|p| p.id).collect();
+    let mut by_document: BTreeMap<(String, Option<i64>), Vec<String>> = BTreeMap::new();
+    for p in taken.iter().filter(|p| p.origin == crate::core::proposals::Origin::Document) {
+        let Some(field) = module_id(&p.field_id) else { continue };
+        if let (Some(read), true) = (read_from(p), sent.get(field) == Some(&p.value)) {
+            by_document.entry(read).or_default().push(field.to_string());
+        }
+    }
+    if let kernel::Origin::Person { account } = &person {
+        for ((document, page), fields) in by_document {
+            let mut now: Map<String, Value> = saved(conn)?.into_iter().filter(|(k, _)| w.has(k)).collect();
+            for f in &fields {
+                now.insert(f.clone(), sent[f].clone());
+            }
+            let origin = kernel::Origin::Document { document, page, account: account.clone() };
+            if let Err(e) = store::save_window(conn, w.id, now, &origin) {
+                return service::invalid(e);
+            }
+        }
+    }
+    if let Err(e) = store::save_window(conn, w.id, sent, &person) {
+        return service::invalid(e);
+    }
     // with the save, what documents suggested for the fields now written is set aside (ADR-038)
-    let (form_id, saved) = (id.to_string(), values.clone());
-    let accept = move |tx: &Connection| {
-        crate::core::proposals::accept_in(tx, &ids)?;
-        crate::core::proposals::discard_filled(tx, &form_id, None, &saved)?;
-        Ok(())
-    };
-    let taken = crate::core::profile::service::Taken { sources, then: Some(Box::new(accept)) };
-    crate::core::onboarding::service::save_profile_confirmed_from(conn, profile, decision, &taken)
+    let written = saved_values(conn, id)?;
+    let ids: Vec<String> = taken.into_iter().map(|p| p.id).collect();
+    crate::core::proposals::accept_in(conn, &ids)?;
+    crate::core::proposals::discard_filled(conn, id, None, &written)?;
+    crate::core::onboarding::service::after_save(conn)?;
+    let profile = service::get_profile(conn)?.ok_or(crate::storage::StorageError::NoProfile)?;
+    Ok(SaveProfileOutcome::Saved { profile })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::profile::domain::{InstitutionInput, InstitutionKind};
-    use crate::storage::open_encrypted;
-
-    const KEY: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-
-    fn conn() -> (tempfile::TempDir, Connection) {
-        let dir = tempfile::tempdir().unwrap();
-        let c = open_encrypted(&dir.path().join("t.db"), KEY).unwrap();
-        (dir, c)
-    }
-
-    fn values(v: Value) -> Values {
-        serde_json::from_value(v).unwrap()
-    }
-
-    fn saved(out: SaveProfileOutcome) -> crate::core::profile::service::ProfileView {
-        match out {
-            SaveProfileOutcome::Saved { profile } => profile,
-            other => panic!("not saved: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn an_older_institution_reads_its_kind_as_an_attention_profile() {
-        let (_d, mut c) = conn();
-        let old = ProfileInput { institution: InstitutionInput { name: "Asilo Ficticio".into(), kind: InstitutionKind::ElderlyHome, ..Default::default() }, ..Default::default() };
-        store::save(&mut c, &old).unwrap();
-        let view = get(&c, "institution.identity").unwrap();
-        assert_eq!(view.values["institution.populations"], json!(["older_adults"]));
-        assert_eq!(view.values["institution.modalities"], json!(["residential"]));
-        assert_eq!(view.missing, vec!["institution.mission"]);
-    }
-
-    #[test]
-    fn a_mixed_institution_is_saved_whole_and_its_kind_follows() {
-        let (_d, mut c) = conn();
-        let v = values(json!({
-            "institution.name": "Casa Ficticia", "institution.mission": "Acompañar.",
-            "institution.populations": ["childhood", "older_adults"], "institution.sex_served": "all",
-            "institution.modalities": ["day_care"], "institution.care_areas": ["care", "food"],
-        }));
-        let p = saved(save(&mut c, "institution.identity", v, None).unwrap());
-        assert_eq!(p.input.institution.kind, InstitutionKind::Other);
-        assert_eq!(crate::core::institution::kind(&c).as_deref(), Some("other"));
-        let a = p.input.institution.attention.unwrap();
-        assert_eq!((a.populations.len(), a.sex_served.as_deref(), a.care_areas.len()), (2, Some("all"), 2));
-        assert!(get(&c, "institution.identity").unwrap().missing.is_empty());
-        let sheet = crate::core::ai_sheet::profile_context(&c).unwrap();
-        assert!(sheet.contains("A quién atiende: niñez, personas mayores (mujeres y hombres)."), "{sheet}");
-        assert!(sheet.contains("Cómo atiende: estancia de día."), "{sheet}");
-    }
-
-    #[test]
-    fn a_code_out_of_its_list_is_refused_and_nothing_is_saved() {
-        let (_d, mut c) = conn();
-        let v = values(json!({ "institution.name": "Casa", "institution.populations": ["aliens"] }));
-        match save(&mut c, "institution.identity", v, None).unwrap() {
-            SaveProfileOutcome::Invalid { issues } => assert_eq!((issues[0].code, issues[0].field.as_str()), ("code_unknown", "institution.populations")),
-            other => panic!("{other:?}"),
-        }
-        assert!(store::load_current(&c).unwrap().is_none());
-        assert!(matches!(get(&c, "nope"), Err(ServiceError::NotFound)));
-    }
-
-    #[test]
-    fn the_sex_served_is_not_kept_without_populations_and_the_mission_goes_through_the_scanner() {
-        let (_d, mut c) = conn();
-        let v = values(json!({ "institution.name": "Casa", "institution.sex_served": "women", "institution.mission": "Llamar a maria.lopez@example.com" }));
-        assert!(matches!(save(&mut c, "institution.identity", v.clone(), None).unwrap(), SaveProfileOutcome::Quarantine { .. }));
-        let p = saved(save(&mut c, "institution.identity", v, Some(Decision::Redact)).unwrap());
-        assert_eq!(p.input.institution.attention.unwrap().sex_served, None, "it does not apply without populations");
-        assert!(!p.input.institution.mission.unwrap().contains("maria.lopez"));
-    }
-
-    fn invalid(out: SaveProfileOutcome) -> Vec<(&'static str, String)> {
-        match out {
-            SaveProfileOutcome::Invalid { issues } => issues.into_iter().map(|i| (i.code, i.field)).collect(),
-            other => panic!("not refused: {other:?}"),
-        }
-    }
-
-    /// Each window of «Mi institución» saves its own fields, the new ones included, and leaves the others as they were.
-    #[test]
-    fn every_window_saves_its_fields_and_keeps_the_rest() {
-        let (_d, mut c) = conn();
-        let identity = values(json!({
-            "institution.name": "Asilo Ficticio", "institution.mission": "Cuidar.", "institution.populations": ["older_adults"],
-            "institution.modalities": ["residential"], "institution.age_min": 60, "institution.services": "Residencia y comedor.",
-        }));
-        saved(save(&mut c, "institution.identity", identity, None).unwrap());
-        let contact = values(json!({
-            "institution.contact_phone": "55 5555 0101", "institution.street": "Calle Ficticia", "institution.ext_number": "12",
-            "institution.postal_code": "45010", "institution.state": "jal", "institution.municipality": "Zapopan",
-        }));
-        saved(save(&mut c, "institution.contact", contact, None).unwrap());
-        let legal = values(json!({
-            "institution.legal_name": "Asilo Ficticio, I.A.P.", "institution.purpose": "La asistencia a personas mayores.",
-            "institution.legal_form": "iap", "institution.founded_year": 1987, "institution.junta_folio": "JAP-0001",
-            "institution.legal_rfc": "afi870101ab1", "institution.tax_regime": "non_profit", "institution.authorized_donee": "yes",
-            "institution.donee_category": "assistance", "institution.cluni": "no", "institution.cluni_key": "kept only with yes",
-        }));
-        saved(save(&mut c, "institution.legal", legal, None).unwrap());
-        let capacity = values(json!({ "institution.capacity_total": 25, "institution.served_estimate": 18, "institution.notes": "Notas." }));
-        let p = saved(save(&mut c, "institution.capacity", capacity, None).unwrap());
-
-        // every window kept what the others saved
-        let i = &p.input.institution;
-        assert_eq!((i.name.as_str(), i.contact_phone.as_deref(), i.legal_rfc.as_deref()), ("Asilo Ficticio", Some("55 5555 0101"), Some("AFI870101AB1")));
-        assert_eq!((p.input.capacity_total, p.input.served_estimate), (Some(25), Some(18)));
-        let d = i.details.as_ref().unwrap();
-        assert_eq!(d["institution.age_min"], json!(60));
-        assert_eq!(d["institution.street"], json!("Calle Ficticia"));
-        assert_eq!(d["institution.junta_folio"], json!("JAP-0001"));
-        assert!(!d.contains_key("institution.cluni_key"), "it does not apply without a CLUNI");
-
-        // what each window shows, and what is still missing in it
-        assert!(get(&c, "institution.legal").unwrap().missing.is_empty());
-        let contact = get(&c, "institution.contact").unwrap();
-        assert_eq!(contact.values["institution.postal_code"], json!("45010"));
-        assert!(contact.missing.is_empty());
-        assert_eq!(get(&c, "institution.identity").unwrap().values["institution.services"], json!("Residencia y comedor."));
-
-        // emptying a field of a window empties it, and only that one
-        let contact = values(json!({ "institution.state": "jal", "institution.municipality": "Zapopan", "institution.street": "Calle Ficticia" }));
-        saved(save(&mut c, "institution.contact", contact, None).unwrap());
-        assert_eq!(get(&c, "institution.contact").unwrap().missing, vec!["institution.postal_code"]);
-        assert_eq!(get(&c, "institution.legal").unwrap().values["institution.junta_folio"], json!("JAP-0001"));
-        assert_eq!(get(&c, "institution.identity").unwrap().values["institution.age_min"], json!(60));
-    }
-
-    /// ERP-2 (A1, A2, A3): «Capacidad y cifras» reads how it serves from «Su institución». Where people stay it asks
-    /// the places and how many are there today; where they come and go, how many it served in the last year; a mix,
-    /// both. A number never changes its meaning: the count that stops applying is kept, neither asked nor shown.
-    #[test]
-    fn the_capacity_window_reads_how_it_serves_from_another_window() {
-        let (_d, mut c) = conn();
-        let identity = |modalities: Value| values(json!({ "institution.name": "Red Ficticia", "institution.populations": ["general_public"], "institution.modalities": modalities, "institution.sex_served": "all", "institution.age_min": 5 }));
-        let p = saved(save(&mut c, "institution.identity", identity(json!(["community", "support"])), None).unwrap());
-        assert_eq!(p.input.institution.attention.as_ref().unwrap().sex_served, None, "the public at large has no sex nor ages to say");
-        assert!(p.input.institution.details.as_ref().is_none_or(|d| !d.contains_key("institution.age_min")));
-
-        let view = get(&c, "institution.capacity").unwrap();
-        assert_eq!(view.context, values(json!({ "institution.modalities": ["community", "support"] })), "only what decides a field here");
-        assert_eq!(view.missing, vec!["institution.served_last_year", "institution.staff_paid_estimate", "institution.staff_volunteer_estimate"]);
-        let figures = values(json!({ "institution.capacity_total": 40, "institution.served_estimate": 18, "institution.served_last_year": 350, "institution.modalities": ["residential"] }));
-        let p = saved(save(&mut c, "institution.capacity", figures.clone(), None).unwrap());
-        let last_year = |p: &ProfileInput| p.institution.details.as_ref().and_then(|d| d.get("institution.served_last_year").cloned());
-        assert_eq!((p.input.capacity_total, p.input.served_estimate, last_year(&p.input)), (None, None, Some(json!(350))), "what the window sends of another one does not decide");
-        let o = crate::core::overview::institution_overview(&c).unwrap();
-        assert_eq!((o.people.value, o.people_period, o.capacity), (350, "last_year", None));
-
-        // a residence with its community programs: the places and both counts
-        saved(save(&mut c, "institution.identity", identity(json!(["residential", "community"])), None).unwrap());
-        assert_eq!(get(&c, "institution.capacity").unwrap().missing, vec!["institution.capacity_total", "institution.served_estimate", "institution.staff_paid_estimate", "institution.staff_volunteer_estimate"]);
-        let p = saved(save(&mut c, "institution.capacity", figures.clone(), None).unwrap());
-        assert_eq!((p.input.capacity_total, p.input.served_estimate, last_year(&p.input)), (Some(40), Some(18), Some(json!(350))));
-        let o = crate::core::overview::institution_overview(&c).unwrap();
-        assert_eq!((o.people.value, o.people_period, o.occupied_percent), (18, "today", Some(45)));
-
-        // only a residence: the 18 of today is never read as the people of a year, and the 350 is kept unseen
-        saved(save(&mut c, "institution.identity", identity(json!(["residential"])), None).unwrap());
-        assert!(!get(&c, "institution.capacity").unwrap().missing.contains(&"institution.served_last_year"));
-        // only the community again: the 350 is back, not the 18
-        saved(save(&mut c, "institution.identity", identity(json!(["community"])), None).unwrap());
-        let o = crate::core::overview::institution_overview(&c).unwrap();
-        assert_eq!((o.people.value, o.people_period, o.capacity, o.occupied_percent), (350, "last_year", None, None));
-        let kept = store::load_current(&c).unwrap().unwrap().input;
-        assert_eq!((kept.capacity_total, kept.served_estimate), (Some(40), Some(18)), "kept, neither asked nor shown");
-    }
-
-    #[test]
-    fn a_wrong_postal_code_rfc_date_or_age_range_is_refused() {
-        let (_d, mut c) = conn();
-        saved(save(&mut c, "institution.identity", values(json!({ "institution.name": "Casa" })), None).unwrap());
-        assert_eq!(invalid(save(&mut c, "institution.contact", values(json!({ "institution.postal_code": "4501" })), None).unwrap()), vec![("postal_code_invalid", "institution.postal_code".into())]);
-        let legal = values(json!({ "institution.legal_rfc": "AFI870101AB12", "institution.authorized_donee": "yes", "institution.donee_letter_date": "2023-02-30" }));
-        assert_eq!(
-            invalid(save(&mut c, "institution.legal", legal, None).unwrap()),
-            vec![("rfc_moral_invalid", "institution.legal_rfc".into()), ("date_invalid", "institution.donee_letter_date".into())]
-        );
-        let ages = values(json!({ "institution.name": "Casa", "institution.populations": ["adults"], "institution.age_min": 70, "institution.age_max": 30 }));
-        assert_eq!(invalid(save(&mut c, "institution.identity", ages, None).unwrap()), vec![("age_range", "institution.age_max".into())]);
-    }
-
-    /// The folio of the Junta is asked only of the legal forms a Junta watches over.
-    #[test]
-    fn the_junta_is_asked_only_of_an_iap_ibp_or_abp() {
-        let (_d, mut c) = conn();
-        saved(save(&mut c, "institution.identity", values(json!({ "institution.name": "Casa" })), None).unwrap());
-        let ac = values(json!({ "institution.legal_form": "ac", "institution.junta_folio": "JAP-1" }));
-        saved(save(&mut c, "institution.legal", ac, None).unwrap());
-        let view = get(&c, "institution.legal").unwrap();
-        assert!(!view.missing.contains(&"institution.junta_folio") && !view.values.contains_key("institution.junta_folio"));
-        saved(save(&mut c, "institution.legal", values(json!({ "institution.legal_form": "iap" })), None).unwrap());
-        assert!(get(&c, "institution.legal").unwrap().missing.contains(&"institution.junta_folio"));
-    }
-
-    /// The long texts that may reach the AI go through the scanner; the address, folios and keys do not.
-    #[test]
-    fn the_objeto_social_goes_through_the_scanner_and_the_address_does_not() {
-        let (_d, mut c) = conn();
-        saved(save(&mut c, "institution.identity", values(json!({ "institution.name": "Casa" })), None).unwrap());
-        let legal = values(json!({ "institution.purpose": "Escribir a maria.lopez@example.com" }));
-        assert!(matches!(save(&mut c, "institution.legal", legal, None).unwrap(), SaveProfileOutcome::Quarantine { .. }));
-        let contact = values(json!({ "institution.street": "Calle de María López", "institution.contact_email": "contacto@casa.org" }));
-        saved(save(&mut c, "institution.contact", contact, None).unwrap());
-    }
-
-    /// ADR-033 §4 and audit D6: every save leaves a line per datum that changed, with its origin; what is protected
-    /// says only that it changed; saving the same again adds nothing; a save that does not happen leaves nothing.
-    #[test]
-    fn every_save_leaves_its_history_and_the_origin_of_each_datum() {
-        use crate::core::history::changes;
-        let (_d, mut c) = conn();
-        saved(save(&mut c, "institution.identity", values(json!({ "institution.name": "Casa", "institution.mission": "Cuidar." })), None).unwrap());
-        let contact = values(json!({ "institution.street": "Calle Ficticia", "institution.municipality": "Zapopan" }));
-        saved(save(&mut c, "institution.contact", contact.clone(), None).unwrap());
-        let lines = changes(&c, None, 50).unwrap();
-        let line = |f: &str| lines.iter().find(|l| l.field == f).unwrap_or_else(|| panic!("no line for {f}: {lines:?}"));
-        assert_eq!((line("institution.name").value.clone(), line("institution.name").origin.as_str()), (Some(json!("Casa")), "user"));
-        assert_eq!((line("institution.street").value.clone(), line("institution.street").protected), (None, true));
-        assert_eq!(line("institution.municipality").value, Some(json!("Zapopan")));
-        let view = get(&c, "institution.contact").unwrap();
-        assert_eq!(view.origins["institution.street"].origin, "user");
-        assert!(view.origins["institution.street"].confirmed_at.is_some());
-
-        // the same again: nothing new; a save the scanner holds back: nothing either
-        let n = lines.len();
-        saved(save(&mut c, "institution.contact", contact, None).unwrap());
-        let held = values(json!({ "institution.name": "Casa", "institution.mission": "Llamar a maria.lopez@example.com" }));
-        assert!(matches!(save(&mut c, "institution.identity", held, None).unwrap(), SaveProfileOutcome::Quarantine { .. }));
-        assert_eq!(changes(&c, None, 50).unwrap().len(), n);
-    }
-
-    /// The datum and its line go together: if the history cannot be written, the datum is not saved either.
-    #[test]
-    fn without_its_history_a_datum_is_not_saved() {
-        let (_d, mut c) = conn();
-        saved(save(&mut c, "institution.identity", values(json!({ "institution.name": "Casa" })), None).unwrap());
-        c.execute_batch("CREATE TEMP TRIGGER fail_history BEFORE INSERT ON core_change BEGIN SELECT RAISE(ABORT, 'no'); END;").unwrap();
-        assert!(save(&mut c, "institution.identity", values(json!({ "institution.name": "Casa Nueva" })), None).is_err());
-        assert_eq!(store::load_current(&c).unwrap().unwrap().input.institution.name, "Casa");
-    }
-
-    #[test]
-    fn saving_another_window_keeps_the_attention_profile() {
-        let (_d, mut c) = conn();
-        let v = values(json!({ "institution.name": "Casa", "institution.populations": ["adults"], "institution.modalities": ["outpatient"] }));
-        saved(save(&mut c, "institution.identity", v, None).unwrap());
-        // the contact window sends the whole profile without the attention profile: it stays as it was
-        let mut input = store::load_current(&c).unwrap().unwrap().input;
-        input.institution.attention = None;
-        input.institution.contact_email = Some("contacto@casa.org".into());
-        let p = saved(crate::core::onboarding::service::save_profile_confirmed(&mut c, input, None).unwrap());
-        assert_eq!(p.input.institution.attention.unwrap().populations, vec!["adults".to_string()]);
-    }
-
-    /// A window of «Mi institución» says what it holds and what waits in it, and nothing of any AI that fills it.
-    #[test]
-    fn a_window_view_carries_no_trace_of_an_assistant_that_fills() {
-        let (_d, c) = conn();
-        for form in crate::core::institution::forms::FORMS {
-            let view = serde_json::to_value(get(&c, form.id).unwrap()).unwrap();
-            let mut keys: Vec<_> = view.as_object().unwrap().keys().cloned().collect();
-            keys.sort();
-            assert_eq!(keys, vec!["context", "missing", "origins", "proposals", "spec", "values"], "{}", form.id);
-        }
-    }
-}
+#[path = "forms_tests.rs"]
+mod tests;

@@ -74,7 +74,7 @@ mod tests {
         let conn = open_encrypted(&path, KEY).unwrap();
         conn.execute_batch(
             "DROP TABLE kernel_migrations; DROP TABLE kernel_audit; DROP TABLE kernel_outbox; DROP TABLE kernel_history;
-             DROP TABLE kernel_change; DROP TABLE muestra_note;
+             DROP TABLE kernel_change; DROP TABLE muestra_note; DROP TABLE mi_institucion_profile;
              INSERT INTO institution (id,name,kind,created_at,updated_at) VALUES ('i','Asilo','elderly_home','t','t');",
         )
         .unwrap();
@@ -91,7 +91,7 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(owners, [("kernel".into(), 1), ("kernel".into(), 2), ("muestra".into(), 1), ("muestra".into(), 2)]);
+        assert_eq!(owners, [("kernel".into(), 1), ("kernel".into(), 2), ("mi_institucion".into(), 1), ("muestra".into(), 1), ("muestra".into(), 2)]);
         conn.execute("INSERT INTO muestra_note (id, title, created_at) VALUES ('n', 'Nota', 't')", []).unwrap();
     }
 

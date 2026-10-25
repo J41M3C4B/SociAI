@@ -2,8 +2,8 @@
 //! administrator leaves ready (the AI and the accounts), and the indispensable data of the institution, required
 //! before the app is used. Which data they are is decided by the catalog of forms (`essential`) and the steps in
 //! `onboarding::domain`; each step is saved through its window of «Mi institución», the same way (checks, scanner,
-//! history), so the person can leave and come back where they were. Finishing confirms the profile and sets
-//! `institution.onboarded_at` once, for good.
+//! history), so the person can leave and come back where they were. Finishing sets `institution.onboarded_at` once,
+//! for good.
 
 use crate::audit::{self, AuditKind};
 use crate::common::forms::{is_filled, FieldSpec, Values};
@@ -12,7 +12,6 @@ use crate::core::access::service::CurrentUser;
 use crate::core::error::ServiceError;
 use crate::core::onboarding::domain::{self as onboarding, STEPS};
 use crate::core::profile::domain::ProfileInput;
-use crate::core::profile::service;
 use crate::core::profile::service::SaveProfileOutcome;
 use crate::core::profile::storage as profile_store;
 use crate::scanner::guard::{Decision, QuarantineReport};
@@ -191,7 +190,7 @@ fn complete_now(conn: &Connection) -> Result<bool, ServiceError> {
     Ok(onboarding::complete(&onboarding::steps(&saved_values(conn)?, &answered(conn)?)))
 }
 
-/// Closes it: every step complete, the profile confirmed (its first version) and the date set, once.
+/// Closes it: every step complete and the date set, once.
 pub fn finish(conn: &mut Connection, user: &CurrentUser) -> Result<OnboardingStatus, ServiceError> {
     let s = status(conn, user)?;
     if s.done {
@@ -200,33 +199,18 @@ pub fn finish(conn: &mut Connection, user: &CurrentUser) -> Result<OnboardingSta
     if !s.ready {
         return Err(ServiceError::OnboardingIncomplete);
     }
-    if profile_store::load_current(conn)?.is_some_and(|p| p.confirmed_at.is_none()) {
-        service::confirm_profile(conn)?;
-    }
     mark_onboarded(conn)?;
     status(conn, user)
 }
 
-/// What «Mi institución» saves. Once the institution finished its first start, what the person types there is
-/// confirmed at once: the profile never waits for a «review» that nobody could do any more, and the AI sheet and the
-/// stage of a project keep reading it as confirmed. Before that (the administrator left the data to the direction) it
-/// stays a draft, until the save that leaves no indispensable datum missing: that one finishes the first start, from
-/// whatever window it comes (ADR-042: one way to fill the institution).
-pub fn save_profile_confirmed(conn: &mut Connection, input: ProfileInput, decision: Option<Decision>) -> Result<SaveProfileOutcome, ServiceError> {
-    save_profile_confirmed_from(conn, input, decision, &service::Taken::default())
-}
-
-/// As `save_profile_confirmed`, with the suggestions of the AI the person took (IA4).
-pub fn save_profile_confirmed_from(conn: &mut Connection, input: ProfileInput, decision: Option<Decision>, taken: &service::Taken<'_>) -> Result<SaveProfileOutcome, ServiceError> {
-    match service::save_profile_from(conn, input, decision, taken)? {
-        SaveProfileOutcome::Saved { .. } if onboarded(conn)? => Ok(SaveProfileOutcome::Saved { profile: service::confirm_profile(conn)? }),
-        SaveProfileOutcome::Saved { .. } if complete_now(conn)? => {
-            let profile = service::confirm_profile(conn)?;
-            mark_onboarded(conn)?;
-            Ok(SaveProfileOutcome::Saved { profile })
-        }
-        other => Ok(other),
+/// After «Mi institución» saves: the save that leaves no indispensable datum missing finishes the first start, from
+/// whatever window it comes (ADR-042: one way to fill the institution). What is saved is the profile, with no draft
+/// to confirm (D3 of ERP-1).
+pub fn after_save(conn: &mut Connection) -> Result<(), ServiceError> {
+    if !onboarded(conn)? && complete_now(conn)? {
+        mark_onboarded(conn)?;
     }
+    Ok(())
 }
 
 /// The person saw the welcome; it does not show again.

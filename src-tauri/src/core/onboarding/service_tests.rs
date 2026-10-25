@@ -145,8 +145,9 @@ fn a_step_goes_the_way_of_its_window() {
     let OnboardingOutcome::Invalid { issues } = save(&mut c, &rosa, "place", values(serde_json::json!({ "institution.municipality": "Llamar al 55 1234 5678" })), None).unwrap() else { panic!("a phone is not a place") };
     assert_eq!((issues[0].code, issues[0].field.as_str()), ("place_name_invalid", "institution.municipality"));
 
-    let lines = crate::core::history::changes(&c, None, 50).unwrap();
-    assert!(lines.iter().any(|l| l.field == "institution.name" && l.origin == "user"), "{lines:?}");
+    // the history of each datum is the kernel's (ERP-1)
+    let lines = kernel::history(&c, &mi_institucion::service::profile_ref()).unwrap();
+    assert!(lines.iter().flat_map(|r| &r.fields).any(|f| f.field == "name"), "{lines:?}");
     assert!(matches!(save(&mut c, &rosa, "nope", Values::new(), None), Err(ServiceError::NotFound)));
 }
 
@@ -230,38 +231,34 @@ fn the_welcome_is_once_per_person() {
     assert!(!status(&c, &lupe).unwrap().welcomed);
 }
 
+/// D3 of ERP-1: what «Mi institución» saves is the profile at once; there is no draft to confirm. Before the first
+/// start is finished the AI reads it as a draft, and from then on as the profile.
 #[test]
-fn what_mi_institucion_saves_is_confirmed_once_the_first_start_is_finished_and_not_before() {
+fn what_mi_institucion_saves_is_the_profile_and_the_first_start_says_when_it_is_finished() {
     let (_d, mut c) = conn();
     let rosa = user(&c, "rosa", Role::Manager);
     saved(save(&mut c, &rosa, "who", values(serde_json::json!({ "institution.name": "Asilo Ficticio", "institution.mission": "Un hogar digno." })), None).unwrap());
-
-    // before the first start is finished the profile is a draft, and saving from the page keeps it so
-    let mut input = profile_store::load_current(&c).unwrap().unwrap().input;
-    input.institution.mission = Some("Un hogar digno para adultos mayores.".into());
-    match save_profile_confirmed(&mut c, input, None).unwrap() {
-        SaveProfileOutcome::Saved { profile } => assert!(profile.is_draft, "not finished yet: still a draft"),
+    let mission = |m: &str| values(serde_json::json!({ "institution.name": "Asilo Ficticio", "institution.mission": m }));
+    match crate::core::profile::forms::save(&mut c, "institution.identity", mission("Un hogar digno para adultos mayores."), None).unwrap() {
+        SaveProfileOutcome::Saved { profile } => assert!(profile.is_draft, "the first start is not finished yet"),
         other => panic!("not saved: {other:?}"),
     }
 
-    // the institution finishes (everything the steps ask for) and from then on every save is confirmed
+    // the institution finishes (everything the steps ask for), and what is saved is read as the profile
     c.execute("UPDATE institution SET onboarded_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')", []).unwrap();
-    let mut input = profile_store::load_current(&c).unwrap().unwrap().input;
-    input.institution.mission = Some("Un hogar digno y seguro para adultos mayores.".into());
-    match save_profile_confirmed(&mut c, input, None).unwrap() {
+    match crate::core::profile::forms::save(&mut c, "institution.identity", mission("Un hogar digno y seguro para adultos mayores."), None).unwrap() {
         SaveProfileOutcome::Saved { profile } => {
-            assert!(!profile.is_draft && profile.confirmed_at.is_some(), "after the first start a save is confirmed at once");
+            assert!(!profile.is_draft && profile.confirmed_at.is_some());
             assert_eq!(profile.input.institution.mission.as_deref(), Some("Un hogar digno y seguro para adultos mayores."));
         }
         other => panic!("not saved: {other:?}"),
     }
     let sheet = crate::core::ai_sheet::profile_context(&c).unwrap();
-    assert!(!sheet.contains("BORRADOR"), "the AI reads it as confirmed:\n{sheet}");
+    assert!(!sheet.contains("BORRADOR"), "the AI reads it as the profile:\n{sheet}");
 
-    // what is invalid is still not saved, and nothing is confirmed
-    let mut bad = profile_store::load_current(&c).unwrap().unwrap().input;
-    bad.institution.founded_year = Some(3000);
-    assert!(matches!(save_profile_confirmed(&mut c, bad, None).unwrap(), SaveProfileOutcome::Invalid { .. }));
+    // what is invalid is still not saved
+    let bad = values(serde_json::json!({ "institution.founded_year": 3000 }));
+    assert!(matches!(crate::core::profile::forms::save(&mut c, "institution.legal", bad, None).unwrap(), SaveProfileOutcome::Invalid { .. }));
 }
 
 /// The core does not know the AI: whether it has its key is not said here, the command that answers adds it.

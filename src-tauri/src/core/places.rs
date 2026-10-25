@@ -13,7 +13,7 @@
 //! the windows «Mi institución» opens.
 
 use crate::core::access::domain::{Permission, Role};
-use crate::core::institution::forms::{FORMS, LIST_FORMS};
+use crate::core::institution::forms::{forms, LIST_FORMS};
 use crate::core::manual::MANUAL;
 use serde::Serialize;
 use std::sync::LazyLock;
@@ -84,7 +84,7 @@ fn direct(id: &str) -> Option<&'static str> {
     if let Some(page) = id.strip_prefix("screen.") {
         return place(page).map(|p| p.id.as_str());
     }
-    let form = if id.starts_with("record.") { RECORD_FORM } else { FORMS.iter().chain(LIST_FORMS).find(|f| f.id == id || f.field(id).is_some())?.id };
+    let form = if id.starts_with("record.") { RECORD_FORM } else { forms().iter().chain(LIST_FORMS).find(|f| f.id == id || f.field(id).is_some())?.id };
     WINDOWS.iter().find(|(_, forms)| forms.contains(&form)).map(|(w, _)| *w)
 }
 
@@ -185,7 +185,7 @@ mod tests {
     /// Every form of the catalog is in exactly one window, every window has its entry, and «Mi institución» opens it.
     #[test]
     fn every_form_is_in_one_window_that_the_screen_opens() {
-        for f in FORMS.iter().chain(LIST_FORMS) {
+        for f in forms().iter().chain(LIST_FORMS) {
             assert_eq!(WINDOWS.iter().filter(|(_, forms)| forms.contains(&f.id)).count(), 1, "the form {} must say its window in WINDOWS", f.id);
         }
         let mut opened = quoted(&screen_file("src/lib/types.ts"), "export type Place =");
@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(of_entry("howto.saving"), None);
         assert_eq!(of_entry("nope"), None);
         // every field of the catalog has its window
-        for f in FORMS.iter().chain(LIST_FORMS).flat_map(|f| f.fields()) {
+        for f in forms().iter().chain(LIST_FORMS).flat_map(|f| f.fields()) {
             assert!(of_entry(f.id).is_some_and(|p| p.starts_with("profile.")), "{}", f.id);
         }
     }
@@ -254,7 +254,7 @@ mod tests {
     /// Each window of «Mi institución» is a window of the map.
     #[test]
     fn the_windows_of_the_institution_are_windows_of_the_map() {
-        for form in FORMS {
+        for form in forms() {
             let window = direct(form.id).unwrap_or_else(|| panic!("{} has no window in the map", form.id));
             assert!(window.starts_with("profile.") && place(window).is_some(), "{window}");
         }

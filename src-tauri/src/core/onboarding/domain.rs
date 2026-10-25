@@ -91,7 +91,7 @@ pub fn field(id: &str) -> &'static FieldSpec {
 mod tests {
     use super::*;
     use crate::core::institution::catalog::{state_name, RECORD_TYPES, STATES};
-    use crate::core::institution::forms::{form, FORMS, LIST_FORMS};
+    use crate::core::institution::forms::{form, forms, LIST_FORMS};
     use serde_json::json;
 
     fn values(v: serde_json::Value) -> Values {
@@ -107,7 +107,7 @@ mod tests {
     /// earlier step (the capacity, behind how it serves), so nothing hides behind an answer still to come.
     #[test]
     fn the_steps_are_the_indispensable_fields_of_the_catalog() {
-        let essential: Vec<&str> = FORMS.iter().flat_map(|f| f.fields()).filter(|f| f.essential).map(|f| f.id).collect();
+        let essential: Vec<&str> = forms().iter().flat_map(|f| f.fields()).filter(|f| f.essential).map(|f| f.id).collect();
         let asked: Vec<&str> = STEPS.iter().flat_map(|s| s.fields.iter().copied()).collect();
         let mut a = essential.clone();
         let mut b = asked.clone();
@@ -134,8 +134,8 @@ mod tests {
     /// windows would hide or show the wrong fields and the Expediente would ask for the wrong documents.
     #[test]
     fn what_changes_what_the_program_asks_is_indispensable() {
-        let profile = |id: &str| FORMS.iter().any(|f| f.field(id).is_some());
-        let mut deciders: Vec<&str> = FORMS
+        let profile = |id: &str| forms().iter().any(|f| f.field(id).is_some());
+        let mut deciders: Vec<&str> = forms()
             .iter()
             .chain(LIST_FORMS)
             .flat_map(|f| f.fields())

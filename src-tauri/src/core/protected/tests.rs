@@ -18,7 +18,7 @@ fn conn() -> (tempfile::TempDir, Connection) {
 
 fn with_profile(c: &mut Connection) {
     let input = ProfileInput { institution: InstitutionInput { name: "Asilo Ficticio".into(), kind: InstitutionKind::ElderlyHome, ..Default::default() }, ..Default::default() };
-    crate::core::profile::storage::save(c, &input).unwrap();
+    crate::core::profile::storage::save(c, &input, &crate::core::profile::storage::fixtures()).unwrap();
 }
 
 fn values(v: Value) -> Values {

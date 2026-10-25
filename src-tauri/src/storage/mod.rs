@@ -35,10 +35,14 @@ pub enum StorageError {
     WeakPassword,
     #[error("that file already exists")]
     BackupExists,
-    #[error("there is no profile to confirm")]
-    NothingToConfirm,
     #[error("the institution profile does not exist yet")]
     NoProfile,
+    /// The kernel did not apply a change of a module, by its code (`kernel::ApplyError::code`).
+    #[error("the change was not applied: {0}")]
+    Change(&'static str),
+    /// A change of a module does not pass the validation of its dictionary: each field, with the code of why.
+    #[error("the data do not pass the validation")]
+    Invalid(Vec<kernel::Invalid>),
     #[error("a module does not keep the shape of a module: {0}")]
     Modules(String),
     #[error("audit error: {0}")]
