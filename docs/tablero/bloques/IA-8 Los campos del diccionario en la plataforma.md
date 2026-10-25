@@ -2,13 +2,13 @@
 tipo: bloque
 id: IA-8
 carril: ia
-estado: listo
+estado: en-curso
 prioridad: media
 caja: Entrega de resultados; Política de datos
 pedido_por: ERP-2
 acuerdo: tecnico
 depende_de: ERP-2
-rama:
+rama: ia/ia-8-campos-del-diccionario
 adr:
 creado: 2026-10-23
 cerrado:
@@ -38,6 +38,18 @@ Con eso, el ERP-1 publica las capacidades de Mi institución sin declarar la cla
 - [ ] Con el módulo de muestra: una capacidad dice que falta `muestra.note.phone`, y su salida nombra campos `muestra.note.*` sin declarar su clase. `cargo test` lo prueba sin modelo.
 
 ## Plan
+
+La rama nace de IA-7 (en revisión, PR #30) con los dos commits del ERP-2 (PR #29) encima, porque IA-8 toca los mismos archivos que IA-7. Cuando los dos se fusionen, se hace `rebase` sobre `main` y el PR queda solo con IA-8.
+
+1. **«Falta información» con campos** (`capability`): `CapabilityError::NeedsPerson` nombra la entidad por su id (`muestra.note`) y los campos que faltan, tal como los da `Entity::missing`. Sin texto libre: las palabras las pone el operador del IA-4. El contrato sigue sin depender del núcleo.
+2. **La aclaración** (`platform`): `Ask::Missing` lleva, de cada campo, su id completo, su descripción del diccionario (el `kernel::Field` en JSON: tipo, opciones, presencia, condición, límites) y, si la respuesta anterior no pasó, el código del núcleo. Si una capacidad pide un campo que no existe, o uno cuya clase no está en su `data`, la tarea se cierra con `bad_output`.
+3. **La respuesta** (`platform`): llega con los ids completos de lo que se pidió; lo que no se pidió se ignora. El núcleo la valida con `Entity::validate`, con el resto de la entrada como contexto (las condiciones). Si no pasa, la aclaración vuelve con el código en cada campo y cuenta como corrección. Si pasa, se une a la entrada y la capacidad corre otra vez.
+4. **La salida nombra sus campos**: cada propiedad del tipo de salida dice su campo con `#[schemars(extend("x-field" = "muestra.note.title"))]`. La plataforma recorre el esquema y saca la ruta, el campo y su clase, que salen del diccionario (`output_fields`). Lo usa la revisión al arrancar, y después la política del IA-3.
+5. **Al arrancar** (`src/lib.rs`): la app no arranca con una capacidad cuya salida nombre un campo que no existe (`Fault::UnknownField`), o cuya clase no esté en su `data` (`Fault::ClassOutsideData`).
+6. **El módulo de muestra**: la salida de `muestra.leer_nota` nombra sus campos, y una consulta nueva, `muestra.contacto_de_nota`, pide `muestra.note.phone` cuando la nota no lo tiene.
+7. **Las pruebas**: el módulo de prueba de la plataforma declara su parte del diccionario. La lectura vieja de `NeedsPerson { what }` pasa a campos. `src/lib/types.ts` cambia `OutcomeAsk`.
+
+Sin ADR: lo decidieron A5 y la §6 del plano de la IA.
 
 ## Cómo probarlo
 
