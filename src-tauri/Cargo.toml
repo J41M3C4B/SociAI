@@ -10,8 +10,8 @@ edition = "2021"
 # The app and the crates of the ERP (ADR-002, D5): the kernel and each module are a crate, so a dependency the
 # blueprint forbids does not compile. `cargo test` runs them all.
 [workspace]
-members = ["crates/kernel", "crates/modules/*", "crates/modules/*/contract", "crates/capability", "crates/platform"]
-default-members = [".", "crates/kernel", "crates/modules/*", "crates/modules/*/contract", "crates/capability", "crates/platform"]
+members = ["crates/kernel", "crates/modules/*", "crates/modules/*/contract", "crates/capability", "crates/platform", "crates/privacy"]
+default-members = [".", "crates/kernel", "crates/modules/*", "crates/modules/*/contract", "crates/capability", "crates/platform", "crates/privacy"]
 
 # the versions every crate shares, set once so SQLCipher and the rest are built once
 [workspace.dependencies]
@@ -28,6 +28,9 @@ ulid = "3.0.0"
 # the capability contract and the AI platform (ADR-003, A1 and A2)
 capability = { path = "crates/capability" }
 platform = { path = "crates/platform" }
+# the local detector and the vault, for the app and the platform (ADR-004)
+privacy = { path = "crates/privacy" }
+regex = "1.13.1"
 schemars = "1.2.2"
 
 [lib]
@@ -51,13 +54,14 @@ kernel = { workspace = true }
 # the capability contract, under the kernel, and the runtime of the AI platform (ADR-003, A1 and A2)
 capability = { workspace = true }
 platform = { workspace = true }
+privacy = { workspace = true }
 getrandom = "0.4.3"
 hex = { workspace = true }
 keyring-core = "1.0.0"
 calamine = "0.36.1"
 umya-spreadsheet = "3.1.0"
 zip = "8.6.0"
-regex = "1.13.1"
+regex = { workspace = true }
 sqlite-vec = "0.1.9"
 # reads every PDF: its text, the letters and lines of its tables, and draws its scanned pages for Tesseract
 # (ADR-035, ADR-037); pdfium.dll ships in resources/ocr

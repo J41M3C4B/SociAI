@@ -6,8 +6,8 @@
 //! Health of one person keeps its label of today and is never revealed (ADR-044 §3). Nothing here knows the
 //! institution: whoever runs the errand may tell where a value is saved (`know`), and the legend says it by its name.
 
-use crate::scanner::normalize::fold_str;
-use crate::scanner::{FindingKind, ScanReport};
+use crate::normalize::fold_str;
+use crate::{FindingKind, ScanReport};
 use regex::Regex;
 use serde_json::Value;
 use std::sync::{Mutex, OnceLock};
@@ -256,7 +256,7 @@ impl Vault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::{RegexScanner, ScannerConfig, SensitiveScanner};
+    use crate::{RegexScanner, ScannerConfig, SensitiveScanner};
     use serde_json::json;
 
     fn marked(v: &Vault, text: &str) -> String {

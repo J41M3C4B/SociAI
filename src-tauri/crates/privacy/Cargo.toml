@@ -1,0 +1,12 @@
+[package]
+name = "privacy"
+version = "0.1.0"
+description = "The local detector and the vault of SociAI (ADR-004): it finds personal data and covers it with marks, without network"
+edition = "2021"
+publish = false
+
+# It depends on nothing of SociAI: the app and the platform use it.
+[dependencies]
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
