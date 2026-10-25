@@ -86,7 +86,7 @@ fn a_capability_of_a_module_runs_from_end_to_end() {
     let mut conn = opened(&modules);
     let registry = Registry::discover().unwrap();
     let ana = Ana(Cell::new("manager"));
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere };
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, provider: None };
 
     // a note the person saved on the screen, through the kernel (ERP-9)
     let id = kernel::new_id("nota");
@@ -104,7 +104,7 @@ fn a_capability_of_a_module_runs_from_end_to_end() {
     ana.0.set("manager");
     let done = submit(&runtime, &mut conn, None, read());
     assert_eq!(done.state, TaskState::Done, "{done:?}");
-    let Body::Data { capability, value } = &done.body else { panic!("{done:?}") };
+    let Body::Data { capability, value, .. } = &done.body else { panic!("{done:?}") };
     assert_eq!(capability, "muestra.leer_nota");
     assert_eq!(value, &json!({ "id": id, "title": "Primera nota", "body": null, "version": 1 }));
 
@@ -122,7 +122,7 @@ fn a_change_of_a_module_goes_through_the_kernel() {
     let mut conn = opened(&modules);
     let registry = Registry::discover().unwrap();
     let ana = Ana(Cell::new("manager"));
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere };
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, provider: None };
     let id = kernel::new_id("nota");
     let save = || Content::Invoke {
         capability: "muestra.guardar_nota".into(),
@@ -165,7 +165,7 @@ fn a_module_asks_and_gives_fields_of_the_dictionary() {
     let mut conn = opened(&modules);
     let registry = Registry::discover().unwrap();
     let ana = Ana(Cell::new("admin"));
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere };
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, provider: None };
 
     // the class of each datum of an output is the catalog's: the capability does not write it
     let classes = |id: &str| {
@@ -193,7 +193,7 @@ fn a_module_asks_and_gives_fields_of_the_dictionary() {
 
     let done = submit(&runtime, &mut conn, Some(&asked.task), Content::Answer { values: json!({ "muestra.note.phone": "55 1234 5678" }) });
     assert_eq!(done.state, TaskState::Done, "{done:?}");
-    assert_eq!(done.body, Body::Data { capability: "muestra.contacto_de_nota".into(), value: json!({ "title": "Llamar a la donante", "phone": "55 1234 5678" }) });
+    assert_eq!(done.body, Body::Data { capability: "muestra.contacto_de_nota".into(), value: json!({ "title": "Llamar a la donante", "phone": "55 1234 5678" }), withheld: vec![] });
 }
 
 /// Mi institución on the platform (ERP-1): what is missing of the profile, saving a window with the kernel's proposal

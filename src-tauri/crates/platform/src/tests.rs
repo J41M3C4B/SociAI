@@ -465,6 +465,7 @@ struct World {
     clock: Clock,
     accounts: Accounts,
     window: Window,
+    provider: Option<policy::Provider>,
 }
 
 const ANA_ID: &str = "usr_01JABCDEFGHJKMNPQRSTVWXYZ0";
@@ -498,16 +499,28 @@ impl World {
             clock: Clock(Cell::new(1_000_000)),
             accounts: Accounts { role: Cell::new("manager"), active: Cell::new(true), organization: Cell::new("org") },
             window: Window::default(),
+            provider: None,
         }
     }
 
     fn runtime(&self) -> Runtime<'_> {
-        Runtime { registry: &self.registry, modules: &self.modules, accounts: &self.accounts, clock: &self.clock, deliver: &self.window }
+        Runtime {
+            registry: &self.registry,
+            modules: &self.modules,
+            accounts: &self.accounts,
+            clock: &self.clock,
+            deliver: &self.window,
+            provider: self.provider.as_ref(),
+        }
     }
 
     fn submit(&self, who: &Who, task: Option<&str>, content: Content) -> Outcome {
+        self.submit_on(Channel::Screen { place: "institution".into() }, who, task, content)
+    }
+
+    fn submit_on(&self, channel: Channel, who: &Who, task: Option<&str>, content: Content) -> Outcome {
         let runtime = self.runtime();
-        let request = Request { channel: Channel::Screen { place: "institution".into() }, task: task.map(String::from), content };
+        let request = Request { channel, task: task.map(String::from), content };
         runtime.submit(&mut self.conn.borrow_mut(), who, request).unwrap()
     }
 
@@ -626,7 +639,7 @@ fn a_query_hands_its_data_without_approval() {
     let w = world();
     let o = w.invoke(None, "trial.read", json!({}));
     assert_eq!(o.state, TaskState::Done);
-    assert_eq!(o.body, Body::Data { capability: "trial.read".into(), value: json!({ "name": "Casa Hogar" }) });
+    assert_eq!(o.body, Body::Data { capability: "trial.read".into(), value: json!({ "name": "Casa Hogar" }), withheld: vec![] });
     assert_eq!(o.step, 1);
 }
 
@@ -856,7 +869,7 @@ fn an_apply_that_never_ended_and_was_applied_ends_well() {
     }
     let o = w.decide(&asked.task, &fp, true);
     assert_eq!(o.state, TaskState::Done);
-    assert!(matches!(&o.body, Body::Data { capability, value } if capability == "trial.rename" && value["already_applied"] == true), "{o:?}");
+    assert!(matches!(&o.body, Body::Data { capability, value, .. } if capability == "trial.rename" && value["already_applied"] == true), "{o:?}");
     assert_eq!((w.name().as_str(), w.count("kernel_change")), ("Otra", 1), "it is never made twice");
     let result: String = w.conn.borrow().query_row("SELECT result FROM ai_step WHERE task_id = ?1 AND n = 2", [&asked.task], |r| r.get(0)).unwrap();
     assert_eq!(result, "ok");
@@ -969,6 +982,47 @@ fn the_chat_without_a_model_says_how_to_go_on() {
     let o = w.submit(&ANA, None, Content::Text { text: "¿Qué me falta?".into() });
     assert_eq!(o.body, Body::Error { code: "without_ai".into(), next: Next::UseScreen });
     assert!(o.state.is_closed());
+}
+
+/// The first point of the policy (ADR-004 §6): what the person writes meets it before any model, by what the local
+/// detector finds in it and the conditions of the provider.
+#[test]
+fn the_chat_meets_the_policy_before_any_model() {
+    let chat = |conditions, text: &str| {
+        let w = World { provider: Some(policy::Provider { id: "trial".into(), conditions }), ..world() };
+        let o = w.submit(&ANA, None, Content::Text { text: text.into() });
+        let trail = w.trail(&o.task);
+        (o, trail)
+    };
+    let with_a_person = "Cambien el teléfono de Ana al 55 1234 5678";
+
+    // a provider nobody has checked: the data of a person do not go to it, even covered
+    let (o, trail) = chat(policy::Conditions::Unverified, with_a_person);
+    assert_eq!(o.body, Body::Error { code: "not_for_this_provider".into(), next: Next::UseScreen });
+    assert_eq!(o.state, TaskState::Denied);
+    assert!(trail.contains(&line("task.denied", None, None, Some("not_for_this_provider"))), "{trail:?}");
+    let (o, _) = chat(policy::Conditions::Unverified, "¿Qué me falta?");
+    assert_eq!(o.body, Body::Error { code: "without_ai".into(), next: Next::UseScreen }, "what has nothing of a person goes on");
+
+    // a processor: they go covered, so the text goes on to the router (IA-4); the RFC of an organization never goes
+    let (o, _) = chat(policy::Conditions::Processor, with_a_person);
+    assert_eq!(o.body, Body::Error { code: "without_ai".into(), next: Next::UseScreen });
+    let (o, _) = chat(policy::Conditions::Processor, "Nuestro RFC es CHD010101AB1");
+    assert_eq!(o.body, Body::Error { code: "not_for_this_provider".into(), next: Next::UseScreen });
+}
+
+/// The last point of the policy (ADR-004 §6): a notice says what happened and hands over only what may go in one;
+/// the person sees the rest opening the task.
+#[test]
+fn a_notice_hands_over_only_what_may_go_in_one() {
+    let w = world();
+    let input = json!({ "phone": "55 1234 5678", "kind": "casa" });
+    let fact = Channel::Event { fact: "trial.due".into() };
+    let o = w.submit_on(fact, &ANA, None, Content::Invoke { capability: "trial.dial".into(), input: input.clone() });
+    assert_eq!(o.body, Body::Data { capability: "trial.dial".into(), value: json!({ "kind": "casa" }), withheld: vec!["phone".into()] });
+    // the same, for the person on a screen: their role sees every class
+    let o = w.invoke(None, "trial.dial", input.clone());
+    assert_eq!(o.body, Body::Data { capability: "trial.dial".into(), value: input, withheld: vec![] });
 }
 
 #[test]
@@ -1086,7 +1140,7 @@ fn the_kernel_checks_the_answer_before_the_task_goes_on() {
     let answer = json!({ "trial.contact.phone": "55 1234 5678", "trial.contact.kind": "casa", "trial.contact.color": "x", "kind": "oficina" });
     let o = w.answer(&asked.task, answer);
     assert_eq!(o.state, TaskState::Done, "{o:?}");
-    assert_eq!(o.body, Body::Data { capability: "trial.dial".into(), value: json!({ "phone": "55 1234 5678", "kind": "casa" }) });
+    assert_eq!(o.body, Body::Data { capability: "trial.dial".into(), value: json!({ "phone": "55 1234 5678", "kind": "casa" }), withheld: vec![] });
     // a value of a person never reaches the trail
     let everything: String = w
         .conn

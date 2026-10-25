@@ -40,6 +40,7 @@ fn what(word: &str) -> &'static str {
         "CLABE" => "una CLABE",
         "TARJETA" => "un número de tarjeta",
         "NSS" => "un número de seguro social",
+        "DATO" => "un dato de una persona",
         _ => "una clave de elector",
     }
 }
@@ -48,7 +49,7 @@ fn what(word: &str) -> &'static str {
 fn mark_pattern() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        let words = r"NOMBRE|CORREO|TEL[EÉ]FONO|RFC|CURP|CLABE|TARJETA|NSS|CLAVE[ _]ELECTOR";
+        let words = r"NOMBRE|CORREO|TEL[EÉ]FONO|RFC|CURP|CLABE|TARJETA|NSS|CLAVE[ _]ELECTOR|DATO";
         Regex::new(&format!(r"(?i)\[\s*({words})[ _-]?(\d{{1,3}})\s*\]|\b({words})_(\d{{1,3}})\b")).unwrap()
     })
 }
@@ -162,6 +163,23 @@ impl Vault {
     }
 
     /// Every value of this errand still written in a text, as its mark (the longest first).
+    /// A value the dictionary says is of a person, covered whole (ADR-004): by the mark it already has in this errand,
+    /// by one of its kind when the scanner found all of it (`report`, of the value alone), or as `[DATO_n]`.
+    pub fn cover(&self, value: &str, report: &ScanReport) -> String {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return value.to_string();
+        }
+        if let Some(e) = self.entries().iter().find(|e| e.value == trimmed) {
+            return e.mark.clone();
+        }
+        let whole = |f: &&crate::Finding| value.get(f.span.clone()).is_some_and(|found| found.trim() == trimmed);
+        match report.findings.iter().find(whole).and_then(|f| word(f.kind)) {
+            Some(w) => self.mark_of(w, trimmed),
+            None => self.mark_of("DATO", trimmed),
+        }
+    }
+
     fn mark_known(&self, text: &str) -> String {
         let entries = self.entries();
         let mut values: Vec<(&str, &str)> = entries.iter().map(|e| (e.value.as_str(), e.mark.as_str())).filter(|(v, _)| v.chars().count() >= 3).collect();
@@ -328,5 +346,18 @@ mod tests {
         let v = Vault::new();
         assert_eq!(marked(&v, "Atendemos a 40 personas en la colonia Centro."), "Atendemos a 40 personas en la colonia Centro.");
         assert!(v.counts().is_empty());
+    }
+
+    #[test]
+    fn a_value_of_the_dictionary_is_covered_whole() {
+        let scanner = RegexScanner::new(ScannerConfig::default());
+        let v = Vault::new();
+        let phone = "55 1234 5678";
+        assert_eq!(v.cover(phone, &scanner.scan(phone)), "[TELEFONO_1]");
+        let other = "Lote 7, manzana 2";
+        assert_eq!(v.cover(other, &scanner.scan(other)), "[DATO_1]");
+        assert_eq!(v.cover(" 55 1234 5678 ", &ScanReport::default()), "[TELEFONO_1]", "the same value keeps its mark");
+        assert_eq!(v.reveal("Llamar al [TELEFONO_1] en [DATO_1]"), "Llamar al 55 1234 5678 en Lote 7, manzana 2");
+        assert!(v.legend().unwrap().contains("[DATO_1]: un dato de una persona"));
     }
 }

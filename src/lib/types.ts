@@ -883,7 +883,8 @@ export interface OutcomeEvidence {
 }
 export type OutcomeBody =
   | { kind: "answer"; text: string; evidence: OutcomeEvidence[] }
-  | { kind: "data"; capability: string; value: unknown }
+  /** `withheld`: the paths the policy took out for where it goes (ADR-004), never their values; absent when none. */
+  | { kind: "data"; capability: string; value: unknown; withheld?: string[] }
   | { kind: "clarification"; capability: string; ask: OutcomeAsk }
   | { kind: "proposal"; capability: string; proposal: unknown; fingerprint: string; again: OutcomeAgain | null }
   | { kind: "state"; reason: string }

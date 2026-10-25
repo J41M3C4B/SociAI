@@ -3429,6 +3429,7 @@ dependencies = [
  "hex",
  "jsonschema",
  "kernel",
+ "privacy",
  "rusqlite",
  "schemars 1.2.2",
  "serde",

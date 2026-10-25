@@ -83,7 +83,7 @@ Lo que importa es qué hace el proveedor con los datos, no si se le paga (C2). H
 
 1. **La pantalla:** un dato va si el rol de la persona ve su clase (K2).
 2. **Un agregado de 3 o más se trata como `internal`** («cuántos, nunca quiénes»). Ya está disociado (art. 9 fr. III). Uno de menos de 3 conserva su clase.
-3. **Un dato de la salida que no nombra su campo** toma la clase más alta del `data` de su capacidad.
+3. **Un dato de la salida que no nombra su campo** se decide con la más estricta de las clases del `data` de su capacidad: va solo si todas lo dejan ir.
 4. **Lo tapado solo vive en memoria,** mientras dura el paso. Se restaura solo hacia la persona, nunca en un aviso ni en la auditoría.
 5. **La auditoría nunca lleva valores,** de ninguna clase: solo ids y códigos.
 6. **El texto que escribe la persona no trae clase:** lo clasifica el detector local, y cada cosa que encuentra toma la suya.

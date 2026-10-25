@@ -1,7 +1,9 @@
 //! The executor (P7) and the path of a request through it: open or resume the task, run each step under its controls,
 //! pause, close, and hand the outcome over. Before every invocation: the task may go on, the same step was not run
-//! already, the permission, and the input fits its contract. After it: the output fits its contract, and the
-//! permission once more before handing it over. Every pause and every close leaves its code in the trail.
+//! already, the permission and the classes of data the account sees, and the input fits its contract. After it: the
+//! output fits its contract, the permission once more, and the policy hands it over field by field (ADR-004). What
+//! the person writes in the chat meets the policy before any model. Every pause and every close leaves its code in the
+//! trail.
 //!
 //! A modification is prepared and applied on the kernel (ERP-9): its `prepare` gives the kernel's proposal, the person
 //! approves that proposal by its fingerprint, and the `apply` applies only that fingerprint.
@@ -15,6 +17,7 @@ use kernel::{Proposal, TaskEvent, TaskMoment};
 
 use super::dictionary;
 use super::outcome::{Again, Ask, Body, Next, Outcome};
+use super::policy::{self, Datum, Destination, Purpose};
 use super::request::{Channel, Content, Request};
 use super::store;
 use super::task::{Pause, Phase, Reached, Task, TaskState, Waiting};
@@ -116,12 +119,26 @@ impl Runtime<'_> {
         }
         task.turn_ms = now;
         match content {
-            // the chat needs the router, which comes with IA-4
-            Content::Text { .. } => self.close(conn, &mut task, TaskState::Error, "without_ai", 0, error("without_ai", Next::UseScreen)),
+            Content::Text { text } => self.chat(conn, &mut task, text),
             Content::Invoke { capability, input } => self.invoke(conn, who, &mut task, &capability, input),
             Content::Answer { values } => self.answer(conn, who, &mut task, values),
             Content::Decision { fingerprint, approve } => self.decide(conn, who, &mut task, &fingerprint, approve),
         }
+    }
+
+    /// What the person wrote, before any model: the first point of the policy (ADR-004 §6). Without a provider, or
+    /// with something in it that may not go to this one, it ends here; what may go is what the router will receive.
+    fn chat(&self, conn: &Connection, task: &mut Task, text: String) -> Done {
+        let Some(provider) = self.provider else {
+            return self.close(conn, task, TaskState::Error, "without_ai", 0, error("without_ai", Next::UseScreen));
+        };
+        let to_router = policy::to_model(provider, Purpose::Route, vec![Datum::Text(text)]);
+        if !to_router.left_out().is_empty() {
+            self.trail(conn, task, TaskMoment::Denied, None, None, Some("not_for_this_provider"))?;
+            return self.close(conn, task, TaskState::Denied, "not_for_this_provider", 0, error("not_for_this_provider", Next::UseScreen));
+        }
+        // the router comes with IA-4, and it receives `to_router`, never the text as it was written
+        self.close(conn, task, TaskState::Error, "without_ai", 0, error("without_ai", Next::UseScreen))
     }
 
     fn open(&self, conn: &Connection, who: &Who, channel: Channel, now: i64) -> Result<Task, RuntimeError> {
@@ -147,8 +164,9 @@ impl Runtime<'_> {
             Some(done) => {
                 store::end_step(conn, &task.id, step.n, "ok", now)?;
                 self.trail(conn, task, TaskMoment::Step, capability, Some("ok"), None)?;
+                // what the kernel applied: ids and the version, nothing of the datum
                 let value = serde_json::to_value(done).unwrap_or_default();
-                self.close(conn, task, TaskState::Done, "done", step.n, Body::Data { capability: step.capability, value })
+                self.close(conn, task, TaskState::Done, "done", step.n, Body::Data { capability: step.capability, value, withheld: vec![] })
             }
             None => {
                 store::end_step(conn, &task.id, step.n, "not_applied", now)?;
@@ -240,7 +258,7 @@ impl Runtime<'_> {
             return self.close(conn, task, TaskState::Done, "rejected", 0, Body::State { reason: "rejected".into() });
         }
         // the approval is of a person with the permission, never of an agent
-        if let Err(code) = self.authorize(conn, who, cap.permission) {
+        if let Err(code) = self.authorize(conn, who, cap) {
             return self.deny(conn, task, cap.id, code);
         }
         // the input approved is the input applied
@@ -277,8 +295,8 @@ impl Runtime<'_> {
         if again != Some(Again::DataChanged) && store::seen(conn, &task.id, cap.id, phase, &hash, approved)? {
             return self.limit(conn, task, Reached::Repeated);
         }
-        // the permission, right before the operation
-        if let Err(code) = self.authorize(conn, who, cap.permission) {
+        // the permission and the classes it touches, right before the operation
+        if let Err(code) = self.authorize(conn, who, cap) {
             return self.deny(conn, task, cap.id, code);
         }
         if let Err(field) = fits(&(cap.input)(), &input) {
@@ -365,10 +383,20 @@ impl Runtime<'_> {
             Phase::Prepare => self.step(conn, who, task, cap, Phase::Apply, input, None, Some(&to_approve)),
             Phase::Read | Phase::Apply => {
                 // the permission once more, before handing it over
-                if let Err(code) = self.authorize(conn, who, cap.permission) {
-                    return self.deny(conn, task, cap.id, code);
-                }
-                self.close(conn, task, TaskState::Done, "done", n, Body::Data { capability: cap.id.into(), value })
+                let sees = match self.authorize(conn, who, cap) {
+                    Ok(sees) => sees,
+                    Err(code) => return self.deny(conn, task, cap.id, code),
+                };
+                // field by field, as the policy lets it go where it goes (ADR-004 §6): a notice, or the person
+                let to = match task.channel {
+                    Channel::Event { .. } => Destination::Notice,
+                    Channel::Chat | Channel::Screen { .. } => Destination::Person { sees: &sees },
+                };
+                let Ok(fields) = dictionary::output_fields(cap, self.modules) else {
+                    return self.close(conn, task, TaskState::Error, "bad_output", n, error("bad_output", Next::TryLater));
+                };
+                let (value, withheld) = policy::hand_over(cap.data, &fields, value, to);
+                self.close(conn, task, TaskState::Done, "done", n, Body::Data { capability: cap.id.into(), value, withheld })
             }
         }
     }
@@ -379,10 +407,17 @@ impl Runtime<'_> {
     }
 
     /// The question of authorization, to the kernel (K2): the account as it is now, the organization and the
-    /// permission. No account (the session closed, locked or of someone else) is no.
-    fn authorize(&self, conn: &Connection, who: &Who, permission: &str) -> Result<(), &'static str> {
+    /// permission. No account (the session closed, locked or of someone else) is no. Then the classes the capability
+    /// touches, against those the account sees (ADR-004 §6, the execution): it gives those, for what is handed over.
+    fn authorize(&self, conn: &Connection, who: &Who, cap: &Capability) -> Result<Vec<&'static str>, &'static str> {
         let account = self.accounts.now(conn, who).ok_or("no_session")?;
-        kernel::authorize(self.modules, &account, who.organization, permission).map_err(kernel::Denial::code)
+        kernel::authorize(self.modules, &account, who.organization, cap.permission).map_err(kernel::Denial::code)?;
+        let sees = kernel::classes_seen(&account);
+        if policy::may_touch(cap.data, &sees) {
+            Ok(sees)
+        } else {
+            Err("class_not_seen")
+        }
     }
 
     /// One moment of the life of the task, in the kernel's audit store (K9): ids and codes of the program only.
