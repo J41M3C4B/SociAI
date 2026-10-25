@@ -66,8 +66,8 @@ mod registry;
 pub use access::{authorize, classes_seen, role, Account, Denial, Permission, Role, Scope, CLASSES, GENERAL, KEPT_IN_HISTORY, ROLES};
 pub use audit::{record_task, AuditError, TaskEvent, TaskMoment};
 pub use change::{
-    applied, apply, fingerprint, history, new_id, propose, Applied, ApplyError, Changeable, Draft, FieldChange, Invalid, Origin,
-    Proposal, Record, Ref,
+    adopt, applied, apply, fingerprint, history, new_id, propose, Applied, ApplyError, Changeable, Draft, Earlier, FieldChange, Invalid,
+    Origin, Proposal, Record, Ref,
 };
 pub use conformance::{conform, Breach};
 pub use dictionary::{

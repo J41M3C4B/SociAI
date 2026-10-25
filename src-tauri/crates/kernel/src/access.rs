@@ -31,11 +31,12 @@ pub const CLASSES: &[&str] = &["public", "internal", "confidential", "personal",
 /// never its value (K5).
 pub const KEPT_IN_HISTORY: &[&str] = &["public", "internal"];
 
-/// What a role may do or see: all of it, or only these ids.
+/// What a role may do or see: all of it, only these ids, or all but these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     All,
     Only(&'static [&'static str]),
+    Except(&'static [&'static str]),
 }
 
 impl Scope {
@@ -43,6 +44,7 @@ impl Scope {
         match self {
             Scope::All => true,
             Scope::Only(ids) => ids.contains(&id),
+            Scope::Except(ids) => !ids.contains(&id),
         }
     }
 }
@@ -70,8 +72,9 @@ impl Role {
 pub const ROLES: &[Role] = &[
     // the technical administrator: everything, including the administration panel
     Role { id: "admin", name: "Administración", grants: Scope::All, sees: Scope::All },
-    // direction and accounting: the whole program, but not the panel, the technical settings nor deleting for good
-    Role { id: "manager", name: "Dirección", grants: Scope::Only(&["kernel.usar"]), sees: Scope::All },
+    // direction and accounting: the whole program, the permissions of every module too, but not the panel, the
+    // technical settings nor deleting for good
+    Role { id: "manager", name: "Dirección", grants: Scope::Except(&["kernel.borrar", "kernel.ajustes", "kernel.administrar"]), sees: Scope::All },
 ];
 
 pub fn role(id: &str) -> Option<&'static Role> {
@@ -186,8 +189,8 @@ mod tests {
         }
         assert!(manager.grants("kernel.usar"));
         assert!(!manager.grants("kernel.borrar") && !manager.grants("kernel.ajustes") && !manager.grants("kernel.administrar"));
-        // a permission of a module goes only to who has everything, until the roles can be given
-        assert!(admin.grants("contabilidad.polizas.registrar") && !manager.grants("contabilidad.polizas.registrar"));
+        // the permissions of a module are the program's: both roles have them (ERP-1, Mi institución)
+        assert!(admin.grants("contabilidad.polizas.registrar") && manager.grants("contabilidad.polizas.registrar"));
         assert!(role("contador").is_none());
     }
 
@@ -197,7 +200,8 @@ mod tests {
         let ask = |a: &Account, org: &str, p: &str| authorize(&modules, a, org, p);
         assert_eq!(ask(&account("manager"), "inst_a", "kernel.usar"), Ok(()));
         assert_eq!(ask(&account("admin"), "inst_a", "contabilidad.polizas.registrar"), Ok(()));
-        assert_eq!(ask(&account("manager"), "inst_a", "contabilidad.polizas.registrar"), Err(Denial::NotGranted));
+        assert_eq!(ask(&account("manager"), "inst_a", "contabilidad.polizas.registrar"), Ok(()));
+        assert_eq!(ask(&account("manager"), "inst_a", "kernel.administrar"), Err(Denial::NotGranted));
         assert_eq!(ask(&account("admin"), "inst_a", "contabilidad.polizas.borrar"), Err(Denial::UnknownPermission));
         assert_eq!(ask(&account("contador"), "inst_a", "kernel.usar"), Err(Denial::UnknownRole));
         assert_eq!(ask(&Account { active: false, ..account("admin") }, "inst_a", "kernel.usar"), Err(Denial::Inactive));
