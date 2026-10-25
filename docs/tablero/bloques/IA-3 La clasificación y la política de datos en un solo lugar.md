@@ -8,7 +8,7 @@ caja: Clasificación de datos; Políticas de datos y PII
 pedido_por:
 depende_de: IA-2, IA-8
 rama: ia/ia-3-clases-y-politica
-adr:
+adr: ADR-004
 creado: 2026-10-20
 cerrado:
 ---
