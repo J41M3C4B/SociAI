@@ -6,7 +6,7 @@ estado: backlog
 prioridad: alta
 caja: Mi institución; Contratos institucionales
 pedido_por:
-depende_de: IA-1, IA-5, ERP-2, ERP-9
+depende_de: IA-1, IA-5, ERP-2, ERP-9, IA-8
 rama:
 adr:
 creado: 2026-10-20
@@ -22,6 +22,8 @@ Mi institución es el módulo más completo, pero sus operaciones no se pueden d
 Es la primera capacidad real que corre por la plataforma.
 
 **Cambio con el plano del ERP (ERP-7, 2026-10-20).** Mi institución ya no es el núcleo: es el **primer módulo con la forma nueva** ([plano del ERP](../../plano-del-erp.md), §4 y paso 5 de la §11). Este bloque no envuelve el código de `core/` en contratos: rehace el perfil y «qué me falta» como módulo sobre el núcleo (ERP-8, ERP-9 y ERP-2), y retira las piezas viejas que sustituye. Desbloquea el IA-4.
+
+**Del [[IA-8 Los campos del diccionario en la plataforma|IA-8]] (acuerdo técnico con el riel IA, 2026-10-24):** «falta información de la persona» y la salida de cada capacidad nombran campos del diccionario de Mi institución, y la clase de cada dato no se declara en la capacidad.
 
 ## Terminado cuando
 
