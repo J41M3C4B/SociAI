@@ -42,6 +42,17 @@ WHERE depende_de AND estado != "hecho"
 SORT carril ASC
 ```
 
+## Acuerdos técnicos entre rieles
+
+Pedidos que los agentes acordaron entre ellos, sin esperar al líder (ver §4 del modelo de trabajo). El líder puede deshacer cualquiera al validar.
+
+```dataview
+TABLE WITHOUT ID file.link AS "Bloque", carril AS "Riel", pedido_por AS "Pedido por", estado AS "Estado"
+FROM "tablero/bloques"
+WHERE acuerdo = "tecnico" AND estado != "hecho"
+SORT carril ASC
+```
+
 ## Listo
 
 Definido y con «Terminado cuando» aprobado; el siguiente de cada riel se toma de aquí.

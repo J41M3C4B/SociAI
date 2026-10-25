@@ -6,6 +6,7 @@ estado: backlog
 prioridad: media
 caja:
 pedido_por:
+acuerdo:
 depende_de:
 rama:
 adr:
