@@ -2,7 +2,7 @@
 tipo: bloque
 id: ERP-2
 carril: erp
-estado: revision
+estado: hecho
 prioridad: media
 caja: Clasificación de datos (lo declara el ERP); Datos operativos del ERP
 pedido_por: IA-3
@@ -10,7 +10,7 @@ depende_de: ERP-8
 rama: erp/erp-2-diccionario-de-datos
 adr:
 creado: 2026-10-20
-cerrado:
+cerrado: 2026-10-24
 ---
 
 ## Qué y por qué
@@ -80,11 +80,11 @@ En el PR [#29](https://github.com/J41M3C4B/SociAI/pull/29). `cargo test` (674 pa
 
 **Qué hacer y qué debe pasar:**
 
-- [ ] Desde `src-tauri/`, en PowerShell: `cargo test dictionary`. Pasan:
+- [x] Desde `src-tauri/`, en PowerShell: `cargo test dictionary`. Pasan:
   - las pruebas del diccionario;
   - la del registro que rechaza un catálogo mal hecho;
   - la de la muestra (`the_kernel_knows_the_note_by_its_dictionary`).
-- [ ] En la app, **Mi institución** valida igual que antes, ahora con las reglas del núcleo:
+- [x] En la app, **Mi institución** valida igual que antes, ahora con las reglas del núcleo:
   - un código postal de 4 dígitos (`0670`) marca error, y `06700` pasa;
   - un RFC de organización mal formado marca error;
   - un municipio con números (`Zapopan 45010`) marca error, y `Benito Juárez` pasa;
@@ -96,3 +96,10 @@ En el PR [#29](https://github.com/J41M3C4B/SociAI/pull/29). `cargo test` (674 pa
 - **Las condiciones miran solo campos de la misma entidad.** Mi institución tiene formularios cuyas condiciones miran otro formulario (`looks_outside`). Con el ERP-1 se decide si su perfil es una sola entidad o si el diccionario necesita mirar afuera.
 
 ## Resultado
+
+Validado por el líder el 2026-10-24: Mi institución valida igual que antes con las reglas del núcleo, y las pruebas del diccionario pasan. Pasó por `rebase` sobre `main` sin conflictos; desde la suite completa (674 pruebas de Rust y 224 del frontend) `main` solo cambió documentos. Fusionado a `main` en el PR [#29](https://github.com/J41M3C4B/SociAI/pull/29) (`ac5f0f2`).
+
+- **K3:** el diccionario vive en `kernel::dictionary`. Cada módulo declara sus entidades en su manifiesto (`entities`), y el registro rechaza un catálogo mal hecho, incluido un campo sin clase.
+- **Lo que el núcleo calcula:** `Entity::validate`, `Entity::missing` y `Modules::field` por id completo, con su clase. Protegido es toda clase que no sea `public` ni `internal`, y `kernel::propose` lo toma del diccionario.
+- **Las reglas** de fecha, código postal, RFC de una organización, CLABE y nombre de un lugar están en el núcleo; `common/forms.rs` y `common/ids.rs` las llaman de ahí.
+- **Lo que sigue:** el [[IA-8 Los campos del diccionario en la plataforma|IA-8]] (PR #32, acuerdo técnico) lleva el diccionario a la plataforma, y el ERP-1 lo usa para Mi institución, con los dos hallazgos de arriba.
