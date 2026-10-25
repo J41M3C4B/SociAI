@@ -195,3 +195,44 @@ fn a_module_asks_and_gives_fields_of_the_dictionary() {
     assert_eq!(done.state, TaskState::Done, "{done:?}");
     assert_eq!(done.body, Body::Data { capability: "muestra.contacto_de_nota".into(), value: json!({ "title": "Llamar a la donante", "phone": "55 1234 5678" }) });
 }
+
+/// Mi institución on the platform (ERP-1): what is missing of the profile, saving a window with the kernel's proposal
+/// and the approval of the direction, the name it cannot be saved without asked of the person as a field of the
+/// dictionary, and a window read back with the class of each datum from the catalog.
+#[test]
+fn the_profile_of_the_institution_runs_on_the_platform() {
+    let modules = Modules::discover().unwrap();
+    let mut conn = opened(&modules);
+    let registry = Registry::discover().unwrap();
+    let ana = Ana(Cell::new("manager"));
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere };
+    let invoke = |capability: &str, input: serde_json::Value| Content::Invoke { capability: capability.into(), input };
+
+    // nothing yet: the name comes first, in its window
+    let missing = submit(&runtime, &mut conn, None, invoke("mi_institucion.que_falta", json!({})));
+    let Body::Data { value, .. } = &missing.body else { panic!("{missing:?}") };
+    assert_eq!(value["missing"][0], json!({ "window": "identity", "field": "name" }));
+
+    // a window without the name: the platform asks the person for it, with its kind
+    let asked = submit(&runtime, &mut conn, None, invoke("mi_institucion.guardar_ventana", json!({ "window": "identity", "mission": "Cuidar." })));
+    let Body::Clarification { ask: Ask::Missing { fields }, .. } = &asked.body else { panic!("{asked:?}") };
+    let asked_for: Vec<(&str, &serde_json::Value)> = fields.iter().map(|f| (f.id.as_str(), &f.field["kind"])).collect();
+    assert_eq!(asked_for, [("mi_institucion.profile.name", &json!("text"))]);
+
+    // with the name, the kernel's proposal; approved, the window is saved with the task as its origin
+    let proposed = submit(&runtime, &mut conn, Some(&asked.task), Content::Answer { values: json!({ "mi_institucion.profile.name": "Casa Ficticia" }) });
+    let Body::Proposal { fingerprint, .. } = &proposed.body else { panic!("{proposed:?}") };
+    assert_eq!(mi_institucion::service::profile(&conn).unwrap().version, 0, "nothing before the approval");
+    let done = submit(&runtime, &mut conn, Some(&asked.task), Content::Decision { fingerprint: fingerprint.clone(), approve: true });
+    assert_eq!(done.state, TaskState::Done, "{done:?}");
+    let history = kernel::history(&conn, &mi_institucion::service::profile_ref()).unwrap();
+    assert_eq!(history[0].origin, kernel::Origin::Task { task: asked.task.clone(), account: ANA.into() });
+
+    // the window, back: its data named by their fields, each of the class the catalog declares
+    let read = submit(&runtime, &mut conn, None, invoke("mi_institucion.ver_ventana", json!({ "window": "identity" })));
+    let Body::Data { value, .. } = &read.body else { panic!("{read:?}") };
+    assert_eq!((value["version"].clone(), value["profile"]["name"].clone(), value["profile"]["mission"].clone()), (json!(1), json!("Casa Ficticia"), json!("Cuidar.")));
+    let fields = platform::output_fields(registry.get("mi_institucion.ver_ventana").unwrap(), &modules).unwrap();
+    let class = |f: &str| fields.iter().find(|x| x.field == format!("mi_institucion.profile.{f}")).map(|x| x.class);
+    assert_eq!((class("name"), class("legal_rfc"), class("legal_rep_name"), class("notes")), (Some("public"), Some("confidential"), Some("personal"), Some("internal")));
+}

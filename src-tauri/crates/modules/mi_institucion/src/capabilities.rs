@@ -8,6 +8,7 @@
 use capability::{Call, CapabilityError, Limits};
 use kernel::{Applied, Origin, Proposal};
 
+use crate::catalog::PROFILE;
 use crate::contract::WindowInput;
 use crate::service;
 use crate::windows;
@@ -150,8 +151,22 @@ fn read_window(call: &Call, which: WhichWindow) -> Result<Window, CapabilityErro
     Ok(Window { window: window.id.into(), version: now.version, profile })
 }
 
+/// What saving the window would do. A field of the window the profile cannot be saved without is asked of the
+/// person, by its field of the dictionary (IA-8).
 fn prepare(call: &Call, input: WindowInput) -> Result<Proposal, CapabilityError> {
-    service::prepare(call.conn, &input).map_err(|_| CapabilityError::Failed { reason: "the window could not be prepared" })
+    let proposal = service::prepare(call.conn, &input).map_err(|_| CapabilityError::Failed { reason: "the window could not be prepared" })?;
+    let window = windows::window(&input.window);
+    let needed: Vec<&'static str> = proposal
+        .invalid
+        .iter()
+        .filter(|i| i.reason == "required" && window.is_some_and(|w| w.has(&i.field)))
+        .filter_map(|i| PROFILE.field(&i.field))
+        .map(|f| f.id)
+        .collect();
+    if !needed.is_empty() {
+        return Err(CapabilityError::needs("mi_institucion.profile", needed));
+    }
+    Ok(proposal)
 }
 
 fn save(call: &mut Call, input: WindowInput) -> Result<Applied, CapabilityError> {

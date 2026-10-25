@@ -12,12 +12,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// What saving a window of the profile asks: the window and its values, by the id of each field of the dictionary
-/// (`legal_name`). The same input prepares the change and applies it. A field of the window left out is emptied.
+/// What saving a window of the profile asks: the window and, beside it, its values by the id of each field of the
+/// dictionary (`{ "window": "legal", "legal_name": "…" }`), where the platform puts what the person answers (IA-8).
+/// The same input prepares the change and applies it. A field of the window left out is emptied.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WindowInput {
     /// `identity`, `contact`, `legal` or `capacity`.
     pub window: String,
+    #[serde(flatten)]
     pub values: Map<String, Value>,
 }
 
