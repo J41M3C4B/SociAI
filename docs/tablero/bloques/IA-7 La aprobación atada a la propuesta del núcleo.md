@@ -2,7 +2,7 @@
 tipo: bloque
 id: IA-7
 carril: ia
-estado: revision
+estado: hecho
 prioridad: alta
 caja: Contratos de capacidades; Registro común de capacidades; Ejecutor; Aprobación
 pedido_por: ERP-9
@@ -10,7 +10,7 @@ depende_de: IA-5, ERP-9
 rama: ia/ia-7-aprobacion-atada-a-la-propuesta
 adr:
 creado: 2026-10-23
-cerrado:
+cerrado: 2026-10-24
 ---
 
 ## Qué y por qué
@@ -154,3 +154,9 @@ PR: https://github.com/J41M3C4B/SociAI/pull/30
 - **La fila 7 del [plano de la IA](../../plano-de-la-ia.md)** dice que la `Call` también lleva la organización. Hoy hay una base por institución y ningún módulo la pide; no entró en este bloque.
 
 ## Resultado
+
+Validado por el líder el 2026-10-24, al probar el [[IA-8 Los campos del diccionario en la plataforma|IA-8]], cuya rama lo traía dentro. Fusionado a `main` en el PR [#30](https://github.com/J41M3C4B/SociAI/pull/30) (`b4f1a17`), después del ERP-2.
+
+- **El `rebase` sobre el ERP-2** chocó donde se esperaba. `kernel::propose` ahora recibe la entidad, y `Draft` ya no lleva `protected`. El módulo de prueba de la plataforma declara su nombre en el diccionario, y el diccionario revisa el largo, que antes revisaba el módulo. Con eso, `cargo test` dio 682 pruebas que pasan y `pnpm test` 224.
+- **Lo que queda:** toda capacidad de cambio pasa por `kernel::propose` y `kernel::apply`. La aprobación se ata a `proposal.fingerprint`, un dato que cambió después de aprobar se prepara y se aprueba otra vez (`data_changed`), y un `apply` incierto se consulta con `kernel::applied`. La muestra publica `muestra.guardar_nota`.
+- **Lo que sigue:** el ERP-1 publica las capacidades de cambio de Mi institución con esta forma.

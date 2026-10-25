@@ -2,7 +2,7 @@
 tipo: bloque
 id: IA-8
 carril: ia
-estado: revision
+estado: hecho
 prioridad: media
 caja: Entrega de resultados; Política de datos
 pedido_por: ERP-2
@@ -11,7 +11,7 @@ depende_de: ERP-2, IA-7
 rama: ia/ia-8-campos-del-diccionario
 adr:
 creado: 2026-10-23
-cerrado:
+cerrado: 2026-10-24
 ---
 
 ## Qué y por qué
@@ -29,13 +29,13 @@ Con eso, el ERP-1 publica las capacidades de Mi institución sin declarar la cla
 
 (Pedido técnico, acordado entre los rieles IA y ERP el 2026-10-24; ver §4 del modelo de trabajo.)
 
-- [ ] Una capacidad puede decir «falta información de la persona» nombrando uno o más campos del diccionario por su id completo (`muestra.note.phone`), en vez de un texto libre.
-- [ ] La aclaración que sale de la entrega trae, de cada campo, su tipo, sus opciones y su presencia, tomados del diccionario. El texto libre es opcional.
-- [ ] La respuesta de la persona pasa por la validación del núcleo antes de que la tarea siga. Si no pasa, la aclaración vuelve como corrección del campo.
-- [ ] El tipo de salida de una capacidad nombra sus campos del diccionario, y la clase de cada uno sale de ahí, sin declararla en la capacidad.
-- [ ] Al arrancar, la plataforma rechaza una capacidad que nombra un campo que no existe, o cuya salida trae una clase que no está en su `data`, el tope.
-- [ ] La plataforma deja la clase de cada campo de la salida lista para la política. El filtrado campo por campo es del IA-3.
-- [ ] Con el módulo de muestra: una capacidad dice que falta `muestra.note.phone`, y su salida nombra campos `muestra.note.*` sin declarar su clase. `cargo test` lo prueba sin modelo.
+- [x] Una capacidad puede decir «falta información de la persona» nombrando uno o más campos del diccionario por su id completo (`muestra.note.phone`), en vez de un texto libre.
+- [x] La aclaración que sale de la entrega trae, de cada campo, su tipo, sus opciones y su presencia, tomados del diccionario. El texto libre es opcional.
+- [x] La respuesta de la persona pasa por la validación del núcleo antes de que la tarea siga. Si no pasa, la aclaración vuelve como corrección del campo.
+- [x] El tipo de salida de una capacidad nombra sus campos del diccionario, y la clase de cada uno sale de ahí, sin declararla en la capacidad.
+- [x] Al arrancar, la plataforma rechaza una capacidad que nombra un campo que no existe, o cuya salida trae una clase que no está en su `data`, el tope.
+- [x] La plataforma deja la clase de cada campo de la salida lista para la política. El filtrado campo por campo es del IA-3.
+- [x] Con el módulo de muestra: una capacidad dice que falta `muestra.note.phone`, y su salida nombra campos `muestra.note.*` sin declarar su clase. `cargo test` lo prueba sin modelo.
 
 ## Plan
 
@@ -63,8 +63,8 @@ PR #32. Se fusiona después del #30 (IA-7) y del #29 (ERP-2), que su rama trae d
 
 **Qué hacer y qué debe pasar:**
 
-- [ ] `cargo test` pasa completo. Las pruebas de IA-8 están en `crates/platform/src/tests.rs` (las que hablan del diccionario, de los campos y de la respuesta) y en `src/platform_tests.rs` (`a_module_asks_and_gives_fields_of_the_dictionary`, con el módulo de muestra).
-- [ ] `pnpm tauri dev` arranca. La revisión nueva al arrancar no encuentra ninguna capacidad fuera del diccionario. En las pantallas no cambia nada: dibujar la aclaración es del riel de diseño.
+- [x] `cargo test` pasa completo. Las pruebas de IA-8 están en `crates/platform/src/tests.rs` (las que hablan del diccionario, de los campos y de la respuesta) y en `src/platform_tests.rs` (`a_module_asks_and_gives_fields_of_the_dictionary`, con el módulo de muestra).
+- [x] `pnpm tauri dev` arranca. La revisión nueva al arrancar no encuentra ninguna capacidad fuera del diccionario. En las pantallas no cambia nada: dibujar la aclaración es del riel de diseño.
 
 ## Hallazgos
 
@@ -72,3 +72,13 @@ PR #32. Se fusiona después del #30 (IA-7) y del #29 (ERP-2), que su rama trae d
 - Juntar IA-7 con ERP-2 rompe las pruebas de la plataforma. Causa: ERP-2 cambió `kernel::propose`, que ahora recibe la entidad, y `Draft` ya no lleva `protected`; el módulo de prueba de IA-7 usaba la forma vieja. Ya está corregido en esta rama. Si ERP-2 se fusiona antes que IA-7, el #30 necesita la misma corrección en su `rebase`, y es del riel IA.
 
 ## Resultado
+
+Validado por el líder el 2026-10-24: `cargo test` pasa completo y la app arranca sin ninguna capacidad fuera del diccionario. Tras fusionar el #29 y el #30, el `rebase` dejó el PR solo con el IA-8. El único choque fue el módulo de prueba de la plataforma, y el código quedó idéntico al que se probó (690 pruebas de Rust y 224 del frontend). Fusionado a `main` en el PR [#32](https://github.com/J41M3C4B/SociAI/pull/32) (`b01a13f`).
+
+- **«Falta información» con campos:** `CapabilityError::needs("muestra.note", ["phone"])`, con lo que da `Entity::missing`. `Ask::Missing` trae, de cada campo, su id completo, su descripción del diccionario y, si la respuesta no pasó, el código del núcleo.
+- **La respuesta** llega con los ids completos. El núcleo la valida con `Entity::validate` antes de que la tarea siga. Si no pasa, se pide otra vez y cuenta como corrección, con el mismo límite.
+- **La salida nombra sus campos** con `x-field`, y `platform::output_fields` da su ruta y su clase, que salen del diccionario. Al arrancar, `outputs_outside_dictionary` rechaza un campo que no existe o una clase fuera del `data` de la capacidad.
+- **Lo que sigue:**
+  - el ERP-1 publica Mi institución con `needs` y `x-field`;
+  - el IA-3 filtra la salida campo por campo con esas clases;
+  - dibujar la aclaración en el chat es del riel de diseño.
