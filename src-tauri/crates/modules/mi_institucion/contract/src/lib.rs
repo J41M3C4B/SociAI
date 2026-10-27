@@ -23,6 +23,15 @@ pub struct WindowInput {
     pub values: Map<String, Value>,
 }
 
+/// What changing data of the profile asks: only the fields it changes, by the id of each field of the dictionary, from
+/// any window (`{ "contact_phone": "55 1234 5678" }`). A field left out is left as it is; a `null` empties it. The same
+/// input prepares the change and applies it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ChangeInput {
+    #[serde(flatten)]
+    pub values: Map<String, Value>,
+}
+
 /// The codes of the 32 states, in alphabetical order of their names.
 pub const STATE_CODES: &[&str] = &[
     "ags", "bc", "bcs", "camp", "coah", "col", "chis", "chih", "cdmx", "dgo", "gto", "gro", "hgo", "jal", "mex", "mich", "mor",
