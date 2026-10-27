@@ -2,7 +2,7 @@
 tipo: bloque
 id: ERP-11
 carril: erp
-estado: en-curso
+estado: revision
 prioridad: alta
 caja: Mi institución; Contratos institucionales
 pedido_por: IA-9
@@ -26,12 +26,12 @@ Es técnico: cabe en el plano del ERP (§7, preparar y aplicar), no baja ninguna
 
 Acordado entre los rieles ERP e IA (§4 del modelo de trabajo). El líder puede deshacerlo al validar.
 
-- [ ] Mi institución publica `mi_institucion.cambiar_datos`, una modificación con aprobación, con el permiso `mi_institucion.perfil.escribir`. Sus clases salen del diccionario, y su entrada nombra cada campo (`x-field`).
-- [ ] Solo toca los campos que trae, de cualquier ventana. Un campo que no viene no se mueve. Un `null` explícito vacía el campo.
-- [ ] Lo que deja de aplicar por un cambio se vacía, como en `guardar_ventana` (la regla del diccionario), y aparece en la propuesta, para que la persona lo vea antes de aprobar.
-- [ ] Un campo que no es del perfil no pasa la validación. Una entrada sin campos no propone nada.
-- [ ] Se prepara y se aplica con el ERP-9, con la misma validación, el mismo historial y el mismo hecho (`mi_institucion.perfil_guardado`) que `guardar_ventana`. Pasa la prueba de conformidad.
-- [ ] La pantalla y `guardar_ventana` no cambian.
+- [x] Mi institución publica `mi_institucion.cambiar_datos`, una modificación con aprobación, con el permiso `mi_institucion.perfil.escribir`. Sus clases salen del diccionario, y su entrada nombra cada campo (`x-field`).
+- [x] Solo toca los campos que trae, de cualquier ventana. Un campo que no viene no se mueve. Un `null` explícito vacía el campo.
+- [x] Lo que deja de aplicar por un cambio se vacía, como en `guardar_ventana` (la regla del diccionario), y aparece en la propuesta, para que la persona lo vea antes de aprobar.
+- [x] Un campo que no es del perfil no pasa la validación. Una entrada sin campos no propone nada.
+- [x] Se prepara y se aplica con el ERP-9, con la misma validación, el mismo historial y el mismo hecho (`mi_institucion.perfil_guardado`) que `guardar_ventana`. Pasa la prueba de conformidad.
+- [x] La pantalla y `guardar_ventana` no cambian.
 
 ## Plan
 
@@ -55,16 +55,26 @@ El líder pidió hacerlo antes que el ERP-3 (2026-10-27), para que el IA-9 no es
 
 ## Cómo probarlo
 
+En el PR [#35](https://github.com/J41M3C4B/SociAI/pull/35). `cargo test` (717 pasan, 0 fallan) y `pnpm test` (224) pasan, sin red ni gasto. La capacidad no tiene pantalla: la usará el chat en el IA-9. Por eso se prueba con las pruebas, y en la app solo se revisa que nada cambió.
+
 **Cómo correrlo:**
-- Carpeta y rama:
-- Antes:
-- Arrancar:
-- Al terminar:
+- Carpeta y rama: `D:\Agente Proyectos\sociai-erp`, rama `erp/erp-11-cambiar-datos`.
+- Antes: nada. No hay migraciones; la base no cambia.
+- Arrancar: en PowerShell, desde `src-tauri\`, `cargo test` (unos 5 minutos). Después, desde la carpeta, `pnpm tauri dev`.
+- Al terminar: cerrar la app.
 
 **Qué hacer y qué debe pasar:**
 
-- [ ] 
+- [ ] **`cargo test` pasa completo.** Las pruebas nuevas están en `crates/modules/mi_institucion`:
+  - `service_tests.rs`: `a_change_touches_only_the_fields_it_names`, `a_null_empties_its_field_and_what_no_longer_applies_shows_in_the_proposal` y `a_change_passes_the_same_validation_and_knows_only_the_fields_of_the_profile`;
+  - `capabilities.rs`: la capacidad por el registro, como la corre la plataforma, y que su entrada nombra cada campo del catálogo.
+- [ ] **Mi institución funciona igual:** guarda un cambio en cualquier ventana, cierra y vuelve a abrir. El cambio sigue y lo demás no se movió.
 
 ## Hallazgos
+
+- **Una entrada sin campos es un error (`no_fields`), no una propuesta vacía:** así a la persona nunca le llega «aprobar nada».
+- **Un campo que no es del perfil no cabe en el esquema de la capacidad,** así que la plataforma lo rechaza antes de llegar al módulo. El servicio también lo rechaza (`unknown_field`) si alguien lo llama sin pasar por la capacidad.
+- **`Profile` y la entrada nueva salen de una sola lista de campos.** Antes, `Profile` estaba escrito a mano. Agregar un campo al catálogo sin agregarlo a la lista hace fallar una prueba.
+- **El texto libre que entra por el chat** lo revisa la plataforma con su escáner (acordado con el riel IA). Desde la pantalla, la app lo sigue revisando antes de llamar al módulo, como en el ERP-1 (D2).
 
 ## Resultado
