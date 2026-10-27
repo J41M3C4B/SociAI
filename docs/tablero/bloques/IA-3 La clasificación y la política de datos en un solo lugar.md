@@ -194,12 +194,12 @@ PR [#34](https://github.com/J41M3C4B/SociAI/pull/34). Si el #33 (ERP-1) entra an
 
 **Qué hacer y qué debe pasar:**
 
-- [ ] **`cargo test` pasa completo** (704 pruebas). Las del IA-3 están en tres lugares:
+- [x] **`cargo test` pasa completo** (704 pruebas). Las del IA-3 están en tres lugares:
   - `crates/platform/src/policy.rs`: la tabla del ADR, los dos tipos de proveedor, lo tapado que vuelve solo hacia la persona y el filtro de la salida;
   - `crates/platform/src/tests.rs`: `the_chat_meets_the_policy_before_any_model` y `a_notice_hands_over_only_what_may_go_in_one`;
   - `crates/privacy/src/vault.rs`: `a_value_of_the_dictionary_is_covered_whole`.
-- [ ] **`pnpm tauri dev` arranca igual que antes.** En las pantallas no cambia nada, porque los dos roles ven todas las clases.
-- [ ] **El ADR-004** (`docs/adr/ADR-004-las-clases-de-datos-y-la-politica.md`) dice lo que se aprobó: las cinco clases, los proveedores según sus condiciones, la tabla y sus reglas.
+- [x] **`pnpm tauri dev` arranca igual que antes.** En las pantallas no cambia nada, porque los dos roles ven todas las clases.
+- [x] **El ADR-004** (`docs/adr/ADR-004-las-clases-de-datos-y-la-politica.md`) dice lo que se aprobó: las cinco clases, los proveedores según sus condiciones, la tabla y sus reglas.
 
 ## Hallazgos
 
