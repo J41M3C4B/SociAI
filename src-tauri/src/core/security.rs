@@ -140,6 +140,9 @@ const SCANNED: &[(&str, &[&str])] = &[
     ("institution", &["mission", "purpose", "services", "admission_criteria"]),
     ("core_change", &["value_json"]),
     ("institution_profile", &["notes"]),
+    // the profile in the module Mi institución, and the history of every module in the kernel (ERP-1)
+    ("mi_institucion_profile", &["mission", "purpose", "services", "admission_criteria", "notes"]),
+    ("kernel_history", &["before", "after"]),
     ("income_source", &["label"]),
     ("expense_item", &["label"]),
     ("fin_income", &["label"]),
@@ -234,7 +237,11 @@ pub fn restore_backup(db: &SharedDb, db_path: &Path, key_hex: &str, bytes: &[u8]
     let swapped = std::fs::rename(db_path, &kept).and_then(|_| std::fs::rename(&restored, db_path).inspect_err(|_| {
         let _ = std::fs::rename(&kept, db_path); // put the original back
     }));
-    let reopened = open_encrypted(db_path, key_hex);
+    // a backup of before the modules hands its profile to Mi institución, as on any opening (ERP-1)
+    let reopened = open_encrypted(db_path, key_hex).map_err(ServiceError::from).and_then(|mut conn| {
+        crate::core::profile::adopt::adopt(&mut conn)?;
+        Ok(conn)
+    });
     match (swapped, reopened) {
         (Ok(()), Ok(conn)) => {
             *guard = conn;
@@ -339,8 +346,7 @@ mod tests {
         use crate::core::profile::domain::*;
         let mut c = c;
         let input = ProfileInput { institution: InstitutionInput { name: "Asilo Ficticio".into(), ..Default::default() }, ..Default::default() };
-        crate::core::profile::storage::save(&mut c, &input).unwrap();
-        crate::core::profile::storage::confirm(&mut c).unwrap();
+        crate::core::profile::storage::save_finished(&mut c, &input);
         let p_id = {
             c.execute(
                 "INSERT INTO project (id,institution_id,profile_id,title,stage,kind,created_at,updated_at)
@@ -374,8 +380,7 @@ mod tests {
         let path = dir.join("sociai.db");
         let mut c = open_encrypted(&path, key).unwrap();
         let input = ProfileInput { institution: InstitutionInput { name: "Asilo Ficticio".into(), ..Default::default() }, ..Default::default() };
-        crate::core::profile::storage::save(&mut c, &input).unwrap();
-        crate::core::profile::storage::confirm(&mut c).unwrap();
+        crate::core::profile::storage::save_finished(&mut c, &input);
         c.execute(
             "INSERT INTO project (id,institution_id,profile_id,title,stage,kind,created_at,updated_at)
              SELECT 'proj_test', institution_id, id, ?1, 'PROFILE', 'internal', 't', 't' FROM institution_profile ORDER BY version DESC LIMIT 1",

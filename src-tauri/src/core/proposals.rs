@@ -4,7 +4,7 @@
 //! rejects it. Accepting is the usual save of the form (IA4): the person puts the suggestion in its field, may
 //! correct it, and «Guardar» marks it accepted in the same transaction as the datum.
 
-use crate::common::forms::{is_filled, problem, AiUse, Sensitivity};
+use crate::common::forms::{is_filled, problem, AiUse};
 use crate::core::error::ServiceError;
 use crate::scanner::guard::Decision;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -94,7 +94,7 @@ pub fn propose(conn: &Connection, p: NewProposal) -> Result<ProposeOutcome, Serv
     }
     // a protected datum of the institution read by a rule (its RFC, a folio) is its own, not a person's: covering it
     // would lose it; it never reaches the AI and its value is forgotten once the person decides (`forget_protected`)
-    let own = p.origin == Origin::Document && field.sensitivity == Sensitivity::InstitutionalPrivate;
+    let own = p.origin == Origin::Document && field.protected();
     // the name of a place is not scanned, as when the person saves it (`profile::domain`): many are named after a person
     let place = field.rule == Some(crate::common::forms::Rule::PlaceName);
     let value = match &p.value {
@@ -210,7 +210,7 @@ fn rank_of(source_ref: Option<&str>) -> i64 {
 
 /// What a field of a form of «Mi institución» holds today; `None` for the forms of lists, which hold their own.
 fn saved_value(conn: &Connection, form_id: &str, field_id: &str) -> Result<Option<Value>, ServiceError> {
-    if !crate::core::institution::forms::FORMS.iter().any(|f| f.id == form_id) {
+    if !crate::core::institution::forms::forms().iter().any(|f| f.id == form_id) {
         return Ok(None);
     }
     Ok(crate::core::profile::forms::saved_values(conn, form_id)?.remove(field_id))
@@ -264,7 +264,7 @@ const COLUMNS: &str = "id, form_id, record_id, field_id, value_json, origin, sou
 /// Once a person decided, the value of a protected datum is not kept in the proposal: it is in its field, or nowhere.
 fn forget_protected(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     let field: Option<String> = conn.query_row("SELECT field_id FROM ai_proposal WHERE id = ?1", [id], |r| r.get(0)).optional()?;
-    let protected = field.and_then(|f| crate::core::institution::forms::field(&f)).is_some_and(|f| f.sensitivity == Sensitivity::InstitutionalPrivate);
+    let protected = field.and_then(|f| crate::core::institution::forms::field(&f)).is_some_and(|f| f.protected());
     if protected {
         conn.execute("UPDATE ai_proposal SET value_json = 'null' WHERE id = ?1 AND status <> 'pending'", [id])?;
     }

@@ -1,19 +1,25 @@
-//! The profile of the institution (ADR-031): validate -> scan -> quarantine -> save -> audit. Commands call these.
+//! The profile of the institution (ADR-031): scan -> save -> audit. Its data are the module Mi institución (ERP-1),
+//! which validates them on the kernel and keeps their history. The scanner still reads the free texts before they are
+//! saved, here in the app: the module does not know the AI exists (D2 of ERP-1).
 
 use crate::audit::{self, AuditKind};
-use crate::core::profile::domain::{ProfileInput, ProfileIssue, ProfileTotals};
 use crate::core::error::ServiceError;
+use crate::core::profile::domain::{ProfileInput, ProfileIssue, ProfileTotals};
+use crate::core::profile::storage::{self as store, StoredProfile};
 use crate::core::screen::scanner_for;
 use crate::scanner::guard::{counts_json, guard_fields, Decision, GuardOutcome, QuarantineReport};
-use crate::core::profile::storage::{self as store, StoredProfile};
-use rusqlite::Connection;
+use crate::storage::StorageError;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProfileView {
     pub institution_id: String,
     pub version: i64,
+    /// When the first start was finished.
     pub confirmed_at: Option<String>,
+    /// The first start is not finished yet.
     pub is_draft: bool,
     pub input: ProfileInput,
     pub totals: ProfileTotals,
@@ -29,7 +35,7 @@ impl From<StoredProfile> for ProfileView {
             is_draft: p.confirmed_at.is_none(),
             confirmed_at: p.confirmed_at,
             totals: p.input.totals(p.as_of_year),
-            issues: p.input.validate(p.as_of_year),
+            issues: p.input.validate(p.as_of_year).into_iter().filter(|i| !i.blocking).collect(),
             input: p.input,
         }
     }
@@ -47,82 +53,90 @@ pub fn get_profile(conn: &Connection) -> Result<Option<ProfileView>, ServiceErro
     Ok(store::load_current(conn)?.map(Into::into))
 }
 
-pub fn save_profile(
-    conn: &mut Connection,
-    input: ProfileInput,
-    decision: Option<Decision>,
-) -> Result<SaveProfileOutcome, ServiceError> {
-    save_profile_from(conn, input, decision, &Taken::default())
+/// Who writes: the person of the session. Only the examples of `fixtures/` and the tests write with no person.
+pub fn origin(conn: &Connection) -> Result<kernel::Origin, ServiceError> {
+    conn.execute_batch("CREATE TEMP TABLE IF NOT EXISTS session_actor (user_id TEXT);")?;
+    let actor: Option<String> = conn.query_row("SELECT user_id FROM temp.session_actor LIMIT 1", [], |r| r.get(0)).optional()?.flatten();
+    Ok(match actor {
+        Some(account) => kernel::Origin::Person { account },
+        None => kernel::Origin::Calculated { rule: "fixtures".into() },
+    })
 }
 
-/// The suggestions of the AI a person took in this save (IA4): the origin of each datum they filled, and what to
-/// write in the same transaction (they are marked as accepted there, so a suggestion is never taken without its datum).
-#[derive(Default)]
-pub struct Taken<'a> {
-    pub sources: std::collections::BTreeMap<String, crate::core::history::Source>,
-    pub then: Option<Box<dyn Fn(&Connection) -> Result<(), crate::storage::StorageError> + 'a>>,
+/// The free texts the scanner reads before saving: the long texts that may reach the AI. The address, the folios and
+/// the keys are the institution's own and are not scanned, like its contact; nor is the municipality, the name of a
+/// place, though many are named after a person («Benito Juárez»).
+fn scanned(field: &str) -> bool {
+    mi_institucion::catalog::PROFILE
+        .field(field)
+        .is_some_and(|f| f.kind == kernel::Kind::LongText && kernel::KEPT_IN_HISTORY.contains(&f.class))
 }
 
-pub fn save_profile_from(
-    conn: &mut Connection,
-    mut input: ProfileInput,
-    decision: Option<Decision>,
-    taken: &Taken<'_>,
-) -> Result<SaveProfileOutcome, ServiceError> {
-    // staff and people served are never written here: the profile keeps what the roster adds up to (ADR-020)
+/// Reads the free texts of these values (by the module's ids) with the scanner, before they are saved: covers what the
+/// person chose to cover, and leaves a line in the log, with counts only. `Some` when the person has to decide first.
+pub fn scan(conn: &Connection, values: &mut Map<String, Value>, decision: Option<Decision>) -> Result<Option<QuarantineReport>, ServiceError> {
+    let found: Vec<String> = values.iter().filter(|(k, v)| scanned(k) && v.is_string()).map(|(k, _)| k.clone()).collect();
+    // each one by the id the screen gives it, so the person is told where it was found
+    let fields: Vec<(String, String)> =
+        found.iter().map(|k| (crate::core::institution::forms::screen_id(k), values[k].as_str().unwrap_or_default().to_string())).collect();
+    // with the current institution: its own phone, mail and name are not flagged
+    let scanner = scanner_for(conn)?;
+    let event = match guard_fields(&scanner, &fields, decision)? {
+        GuardOutcome::Clean => None,
+        GuardOutcome::Quarantine(report) => return Ok(Some(report)),
+        GuardOutcome::Redacted { texts, counts } => {
+            for (field, text) in found.iter().zip(texts) {
+                values.insert(field.clone(), Value::String(text));
+            }
+            Some((AuditKind::ScannerQuarantine, counts_json(&counts, "redacted")))
+        }
+        GuardOutcome::Overridden { counts } => Some((AuditKind::ScannerOverride, counts_json(&counts, "not_personal"))),
+    };
+    if let Some((kind, details)) = event {
+        audit::record(conn, kind, Some("mi_institucion_profile"), None, details)?;
+    }
+    Ok(None)
+}
+
+/// The code of what does not pass, as the screen knows it. The name of the institution has its own words.
+pub fn issue(field: &str, reason: &str) -> ProfileIssue {
+    const KNOWN: &[&str] = &[
+        "required", "wrong_type", "code_unknown", "repeated", "year_invalid", "negative_number", "number_too_small", "number_too_large",
+        "date_invalid", "too_long", "not_an_email", "not_a_phone", "postal_code_invalid", "rfc_moral_invalid", "clabe_invalid",
+        "place_name_invalid", "age_range",
+    ];
+    let code = match (field, reason) {
+        ("name", "required") => "name_missing",
+        (_, r) => KNOWN.iter().copied().find(|k| *k == r).unwrap_or("wrong_type"),
+    };
+    ProfileIssue { code, field: crate::core::institution::forms::screen_id(field), blocking: true }
+}
+
+/// What a save that did not pass says to the screen.
+pub fn invalid(e: StorageError) -> Result<SaveProfileOutcome, ServiceError> {
+    match e {
+        StorageError::Invalid(found) => Ok(SaveProfileOutcome::Invalid { issues: found.iter().map(|i| issue(&i.field, &i.reason)).collect() }),
+        other => Err(other.into()),
+    }
+}
+
+/// Saves a whole profile, window by window (the examples of `fixtures/` load this way): its free texts through the
+/// scanner first. The staff and the people served are never written here: the profile keeps what their modules add
+/// up to (ADR-020).
+pub fn save_profile(conn: &mut Connection, mut input: ProfileInput, decision: Option<Decision>) -> Result<SaveProfileOutcome, ServiceError> {
     let (staff, population) = crate::core::profile::sync::derive(conn)?;
     input.staff = staff;
     input.population = population;
-    let issues = input.validate(store::current_year(conn)?);
-    if issues.iter().any(|i| i.blocking) {
-        return Ok(SaveProfileOutcome::Invalid { issues: issues.into_iter().filter(|i| i.blocking).collect() });
+    let mut values = store::values_of(&input);
+    if let Some(report) = scan(conn, &mut values, decision)? {
+        return Ok(SaveProfileOutcome::Quarantine { report });
     }
-
-    let mut fields: Vec<(String, String)> = Vec::new();
-    input.for_each_text_mut(&mut |path, text| fields.push((path.to_string(), text.clone())));
-    // Scan with the CURRENT institution config (its own phone/email/name are not flagged).
-    let scanner = scanner_for(conn)?;
-    let outcome = guard_fields(&scanner, &fields, decision)?;
-
-    let mut audit_event: Option<(AuditKind, serde_json::Value)> = None;
-    match outcome {
-        GuardOutcome::Clean => {}
-        GuardOutcome::Quarantine(report) => return Ok(SaveProfileOutcome::Quarantine { report }),
-        GuardOutcome::Redacted { texts, counts } => {
-            let mut it = texts.into_iter();
-            input.for_each_text_mut(&mut |_, text| *text = it.next().unwrap_or_default());
-            audit_event = Some((AuditKind::ScannerQuarantine, counts_json(&counts, "redacted")));
-        }
-        GuardOutcome::Overridden { counts } => {
-            audit_event = Some((AuditKind::ScannerOverride, counts_json(&counts, "not_personal")));
-        }
+    let input = ProfileInput { institution: crate::core::profile::storage::input_of(&values).institution, ..input };
+    let origin = origin(conn)?;
+    match store::save(conn, &input, &origin) {
+        Ok(saved) => Ok(SaveProfileOutcome::Saved { profile: saved.into() }),
+        Err(e) => invalid(e),
     }
-
-    // the history of every datum that changed goes in the same transaction (ADR-033 §4)
-    let before = store::load_current(conn)?.map(|p| crate::core::profile::forms::catalog_values(&p.input)).unwrap_or_default();
-    let saved = store::save_with(conn, &input, |tx| {
-        let after = store::load_current(tx)?.map(|p| crate::core::profile::forms::catalog_values(&p.input)).unwrap_or_default();
-        let source_of = |field: &str| taken.sources.get(field).cloned().unwrap_or_else(crate::core::history::Source::user);
-        crate::core::history::record_each(tx, &before, &after, &source_of)?;
-        match &taken.then {
-            Some(then) => then(tx),
-            None => Ok(()),
-        }
-    })?;
-    if let Some((kind, details)) = audit_event {
-        audit::record(conn, kind, Some("institution_profile"), Some(&saved.profile_id), details)?;
-    }
-    Ok(SaveProfileOutcome::Saved { profile: saved.into() })
-}
-
-pub fn confirm_profile(conn: &mut Connection) -> Result<ProfileView, ServiceError> {
-    if let Some(current) = store::load_current(conn)? {
-        let blocking: Vec<_> = current.input.validate(current.as_of_year).into_iter().filter(|i| i.blocking).collect();
-        if !blocking.is_empty() {
-            return Err(ServiceError::ProfileInvalid(blocking));
-        }
-    }
-    Ok(store::confirm(conn)?.into())
 }
 
 #[cfg(test)]
@@ -167,7 +181,7 @@ mod tests {
         let mut p = input();
         p.institution.name.clear();
         let SaveProfileOutcome::Invalid { issues } = save_profile(&mut c, p, None).unwrap() else { panic!() };
-        assert_eq!(issues[0].code, "name_missing");
+        assert_eq!((issues[0].code, issues[0].field.as_str()), ("name_missing", "institution.name"));
         assert!(get_profile(&c).unwrap().is_none());
     }
 
@@ -178,7 +192,7 @@ mod tests {
         p.notes = Some("Contacto de la familia: CURP LOPM800101MDFRZN09".into());
         let SaveProfileOutcome::Quarantine { report } = save_profile(&mut c, p, None).unwrap() else { panic!() };
         assert!(report.has_blocking);
-        assert_eq!(report.fields[0].path, "notes");
+        assert_eq!(report.fields[0].path, "institution.notes");
         assert!(report.fields[0].redacted_preview.contains("[CURP OCULTA]"));
         assert!(!serde_json::to_string(&report).unwrap().contains("LOPM8"));
         assert!(get_profile(&c).unwrap().is_none(), "nothing may be saved before the decision");
@@ -196,9 +210,11 @@ mod tests {
         assert_eq!(ev[0].0, "scanner.quarantine");
         assert!(ev[0].1.contains("\"curp\":1") && ev[0].1.contains("redacted"));
         assert!(!ev[0].1.contains("LOPM"));
-        // the original is nowhere in the database file content
-        let n: i64 = c.query_row("SELECT count(*) FROM institution_profile WHERE notes LIKE '%LOPM8%'", [], |r| r.get(0)).unwrap();
-        assert_eq!(n, 0);
+        // the original is nowhere: not in the profile, not in its history
+        for (table, column) in [("mi_institucion_profile", "notes"), ("kernel_history", "after")] {
+            let n: i64 = c.query_row(&format!("SELECT count(*) FROM {table} WHERE {column} LIKE '%LOPM8%'"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{table}");
+        }
     }
 
     #[test]
@@ -229,15 +245,16 @@ mod tests {
         assert!(matches!(save_profile(&mut c, p, None).unwrap(), SaveProfileOutcome::Saved { .. }));
     }
 
+    /// Who wrote it is the person of the session; with no session, only the examples and the tests write.
     #[test]
-    fn confirm_creates_version_and_audit() {
+    fn a_change_says_who_made_it() {
         let (_d, mut c) = conn();
+        assert_eq!(origin(&c).unwrap(), kernel::Origin::Calculated { rule: "fixtures".into() });
+        c.execute_batch("INSERT INTO temp.session_actor VALUES ('usr_01JB3M7Q8ZK4X2N6V9R5T0W1YD');").unwrap();
         save_profile(&mut c, input(), None).unwrap();
-        let v = confirm_profile(&mut c).unwrap();
-        assert!(!v.is_draft);
-        assert_eq!(audit_events(&c)[0].0, "profile.confirmed");
+        let history = kernel::history(&c, &mi_institucion::service::profile_ref()).unwrap();
+        assert_eq!(history[0].origin, kernel::Origin::Person { account: "usr_01JB3M7Q8ZK4X2N6V9R5T0W1YD".into() });
     }
-
 }
 
 #[cfg(test)]

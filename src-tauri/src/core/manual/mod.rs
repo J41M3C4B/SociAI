@@ -167,7 +167,7 @@ fn about_a_hidden_module(e: &Entry) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::institution::forms::{FORMS, LIST_FORMS};
+    use crate::core::institution::forms::{forms, LIST_FORMS};
 
     fn conn() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -179,7 +179,7 @@ mod tests {
     /// what to put and what it is for, and every form has one too.
     #[test]
     fn every_field_of_the_catalog_has_its_entry_in_the_manual() {
-        for form in FORMS.iter().chain(LIST_FORMS) {
+        for form in forms().iter().chain(LIST_FORMS) {
             assert!(entry(form.id).is_some(), "the form {} has no entry in docs/manual", form.id);
             for f in form.fields() {
                 let e = entry(f.id).unwrap_or_else(|| panic!("the field {} has no entry in docs/manual", f.id));
@@ -210,7 +210,7 @@ mod tests {
                 assert!(crate::core::institution::catalog::RECORD_TYPES.iter().any(|(c, _)| *c == code), "the manual speaks of the document «{id}», which is not in the catalog");
                 continue;
             }
-            if !matches!(kind, "screen" | "howto") && FORMS.iter().chain(LIST_FORMS).all(|f| f.id != *id) {
+            if !matches!(kind, "screen" | "howto") && forms().iter().chain(LIST_FORMS).all(|f| f.id != *id) {
                 assert!(field_spec(id).is_some(), "the manual speaks of «{id}», which is not in the catalog");
             }
         }

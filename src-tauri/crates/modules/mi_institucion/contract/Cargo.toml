@@ -1,0 +1,12 @@
+[package]
+name = "mi_institucion-contract"
+version = "0.1.0"
+description = "What Mi institución publishes: the only part another module may use"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# the schema of its input, for the capabilities that take it
+schemars = { workspace = true }

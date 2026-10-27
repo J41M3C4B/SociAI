@@ -234,6 +234,8 @@ pub enum ApplyError {
     BadFact,
     /// The module did not leave the entity at the next version.
     VersionNotRaised,
+    /// The entity has a history already: an earlier one cannot be taken in under it (`adopt`).
+    HasHistory,
     Db(rusqlite::Error),
 }
 
@@ -247,6 +249,7 @@ impl ApplyError {
             ApplyError::BadOrigin => "bad_origin",
             ApplyError::BadFact => "bad_fact",
             ApplyError::VersionNotRaised => "version_not_raised",
+            ApplyError::HasHistory => "has_history",
             ApplyError::Db(_) => "database",
         }
     }
@@ -388,6 +391,76 @@ pub fn history(conn: &Connection, entity: &Ref) -> rusqlite::Result<Vec<Record>>
     Ok(records)
 }
 
+/// A change from before the kernel kept the history, as the app kept it: when it happened, where it came from and
+/// what it did to each field.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Earlier {
+    /// `YYYY-MM-DDTHH:MM:SSZ`.
+    pub at: String,
+    pub origin: Origin,
+    pub fields: Vec<FieldChange>,
+}
+
+/// Takes in the history an entity had before the kernel (K5), oldest first, when a module takes over data the app
+/// kept. Each earlier change becomes a change of the kernel at the next version, with its fields and its origin, and
+/// no fact: it already happened. A field is protected by its class, as in `propose`, whatever the old history said.
+/// The old history did not always keep who acted or the document: an id it does not have, or that is not an id, goes
+/// empty. Only for an entity with no history yet, inside the transaction where the module writes the entity at the
+/// version this returns.
+pub fn adopt(conn: &Connection, dictionary: &Entity, entity: &Ref, earlier: &[Earlier]) -> Result<i64, ApplyError> {
+    let kept: i64 = conn.query_row(
+        "SELECT count(*) FROM kernel_change WHERE module = ?1 AND entity = ?2 AND entity_id = ?3",
+        [&entity.module, &entity.entity, &entity.id],
+        |r| r.get(0),
+    )?;
+    if kept > 0 {
+        return Err(ApplyError::HasHistory);
+    }
+    let id = |s: &String| Some(s.clone()).filter(|s| is_id(s));
+    let mut version = 0;
+    for e in earlier {
+        version += 1;
+        let (account, document, page, rule, task) = match &e.origin {
+            Origin::Person { account } => (id(account), None, None, None, None),
+            Origin::Document { document, page, account } => (id(account), id(document), *page, None, None),
+            Origin::Calculated { rule } if is_code(rule) => (None, None, None, Some(rule.clone()), None),
+            Origin::Calculated { .. } => return Err(ApplyError::BadOrigin),
+            Origin::Task { task, account } => (id(account), None, None, None, id(task)),
+        };
+        let change = new_id("chg");
+        conn.execute(
+            "INSERT INTO kernel_change (id, fingerprint, module, entity, entity_id, base_version, version, origin, account_id,
+                                        document_id, page, rule, task_id, at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                change,
+                fingerprint(entity, version, &serde_json::json!({ "adopted": e.at })),
+                entity.module,
+                entity.entity,
+                entity.id,
+                version - 1,
+                version,
+                e.origin.kind(),
+                account,
+                document,
+                page,
+                rule,
+                task,
+                e.at
+            ],
+        )?;
+        for c in &e.fields {
+            let protected = dictionary.field(&c.field).is_none_or(Field::protected);
+            let (before, after) = if protected { (None, None) } else { (Some(c.before.to_string()), Some(c.after.to_string())) };
+            conn.execute(
+                "INSERT INTO kernel_history (change_id, field, before, after, protected) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![change, c.field, before, after, protected],
+            )?;
+        }
+    }
+    Ok(version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +580,41 @@ mod tests {
         assert!(!Origin::Person { account: "Rosa Hernández".into() }.well_formed());
         assert!(!Origin::Calculated { rule: "lo calculó Rosa".into() }.well_formed());
         assert!(!Origin::Document { document: "doc_01JB3M7Q8ZK4X2N6V9R5T0W1YE".into(), page: Some(0), account }.well_formed());
+    }
+
+    /// The history from before the kernel is taken in once, at versions 1, 2…, with its origins and the protection
+    /// of the dictionary; what the old history did not keep goes empty.
+    #[test]
+    fn an_earlier_history_is_taken_in_once_under_the_dictionary() {
+        let conn = {
+            let mut conn = Connection::open_in_memory().unwrap();
+            crate::migrate(&mut conn, &crate::Modules::of([]).unwrap()).unwrap();
+            conn
+        };
+        let note = Ref::new("muestra", "note", "nota_1");
+        let change = |field: &str, before: Value, after: Value| FieldChange { field: field.into(), before, after, protected: false };
+        let earlier = [
+            Earlier {
+                at: "2026-03-01T10:00:00Z".into(),
+                origin: Origin::Person { account: String::new() },
+                fields: vec![change("title", Value::Null, json!("Primera")), change("phone", Value::Null, json!("55 1234 5678"))],
+            },
+            Earlier {
+                at: "2026-04-02T11:00:00Z".into(),
+                origin: Origin::Document { document: "doc_01JB3M7Q8ZK4X2N6V9R5T0W1YE".into(), page: Some(3), account: "usr_01JB3M7Q8ZK4X2N6V9R5T0W1YD".into() },
+                fields: vec![change("title", json!("Primera"), json!("Segunda"))],
+            },
+        ];
+        assert_eq!(adopt(&conn, &NOTE, &note, &earlier).unwrap(), 2);
+        let kept = history(&conn, &note).unwrap();
+        assert_eq!(kept.iter().map(|r| (r.version, r.at.as_str())).collect::<Vec<_>>(), [(1, "2026-03-01T10:00:00Z"), (2, "2026-04-02T11:00:00Z")]);
+        assert_eq!(kept[0].origin, Origin::Person { account: String::new() });
+        assert_eq!(kept[0].fields[1], FieldChange { field: "phone".into(), before: Value::Null, after: Value::Null, protected: true });
+        assert_eq!(kept[1].fields, [change("title", json!("Primera"), json!("Segunda"))]);
+        let facts: i64 = conn.query_row("SELECT count(*) FROM kernel_outbox", [], |r| r.get(0)).unwrap();
+        assert_eq!(facts, 0, "what already happened raises no fact");
+        assert!(matches!(adopt(&conn, &NOTE, &note, &earlier), Err(ApplyError::HasHistory)));
+        let bad = Earlier { origin: Origin::Calculated { rule: "lo calculó Rosa".into() }, ..earlier[0].clone() };
+        assert!(matches!(adopt(&conn, &NOTE, &Ref::new("muestra", "note", "nota_2"), &[bad]), Err(ApplyError::BadOrigin)));
     }
 }

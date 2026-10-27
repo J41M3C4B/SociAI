@@ -152,10 +152,13 @@ fn every_module_the_app_links_is_in_the_registry() {
 /// The conformance test (the ERP blueprint §4). The registry already refused a manifest that breaks the shape, a
 /// dependency that does not exist, a cycle and a catalog that breaks the dictionary, such as a field without a class
 /// (ERP-2); each module then migrates alone on an empty encrypted database, its tables carry its prefix and none of
-/// them points at another module's. The capabilities join with ERP-1.
+/// them points at another module's. And its capabilities (ERP-1): each one passed the review of the registry (IA-1),
+/// asks for a permission the module itself declares (ADR-003 A2), prepares the kernel's proposal when it changes
+/// something (ERP-9), and gives only fields of the dictionary of a class its `data` allows (ADR-003 A5).
 #[test]
 fn every_registered_module_conforms() {
     let modules = kernel::Modules::discover().unwrap_or_else(|errors| panic!("{errors:#?}"));
+    let registry = capability::Registry::discover().unwrap_or_else(|errors| panic!("{errors:#?}"));
     assert!(modules.all().count() > 0, "the sample module is registered");
     for m in modules.all() {
         let dir = tempfile::tempdir().unwrap();
@@ -163,5 +166,17 @@ fn every_registered_module_conforms() {
         conn.execute_batch("PRAGMA key = 'conformance'; PRAGMA foreign_keys = ON;").unwrap();
         let breaches = kernel::conform(m.id, m.migrations, &mut conn);
         assert!(breaches.is_empty(), "module `{}`: {:#?}", m.id, breaches.iter().map(ToString::to_string).collect::<Vec<_>>());
+
+        let own = capability::Registry::of(registry.of_module(m.id)).unwrap();
+        for c in own.all() {
+            assert!(m.permissions.iter().any(|p| p.id == c.permission), "{}: asks for `{}`, which `{}` does not declare", c.id, c.permission, m.id);
+        }
+        assert_eq!(platform::changes_without_proposal(&own), vec![], "module `{}`", m.id);
+        assert_eq!(platform::outputs_outside_dictionary(&own, &modules), vec![], "module `{}`", m.id);
+    }
+    // Mi institución publishes what is missing, a window and saving a window
+    let mine: Vec<&str> = registry.of_module("mi_institucion").map(|c| c.id).collect();
+    for id in ["mi_institucion.que_falta", "mi_institucion.ver_ventana", "mi_institucion.guardar_ventana"] {
+        assert!(mine.contains(&id), "{id}: {mine:?}");
     }
 }

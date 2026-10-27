@@ -80,8 +80,7 @@ mod tests {
     fn database(dir: &Path) -> Connection {
         let mut c = open_encrypted(&dir.join("work.db"), KEY).unwrap();
         let input = ProfileInput { institution: InstitutionInput { name: "Asilo Ficticio".into(), ..Default::default() }, ..Default::default() };
-        profile::save(&mut c, &input).unwrap();
-        profile::confirm(&mut c).unwrap();
+        profile::save_finished(&mut c, &input);
         c.execute(
             "INSERT INTO project (id,institution_id,profile_id,title,initial_request,stage,kind,created_at,updated_at)
              SELECT 'proj_test', institution_id, id, 'Proyecto de prueba', 'Cambiar las tuberías de la cocina', 'PROFILE', 'internal', 't', 't'
@@ -111,7 +110,7 @@ mod tests {
         let r = open_encrypted(&target, OTHER_KEY).unwrap();
         let title: String = r.query_row("SELECT title FROM project", [], |r| r.get(0)).unwrap();
         assert_eq!(title, "Proyecto de prueba");
-        let name: String = r.query_row("SELECT name FROM institution", [], |r| r.get(0)).unwrap();
+        let name: String = r.query_row("SELECT name FROM mi_institucion_profile", [], |r| r.get(0)).unwrap();
         assert_eq!(name, "Asilo Ficticio");
         // the search index came along
         let found: i64 = r.query_row("SELECT count(*) FROM document_chunk_fts WHERE document_chunk_fts MATCH 'zanahoria'", [], |r| r.get(0)).unwrap();

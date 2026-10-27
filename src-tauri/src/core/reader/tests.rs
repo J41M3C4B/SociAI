@@ -66,6 +66,8 @@ fn the_constancia_suggests_the_rfc_it_says_although_the_saved_text_covers_it() {
 #[test]
 fn accepting_keeps_the_origin_and_forgets_the_protected_value() {
     let (_d, mut c) = conn();
+    // the person who accepts it: a datum read from a document is saved with the document and with who took it
+    c.execute_batch("CREATE TEMP TABLE IF NOT EXISTS session_actor (user_id TEXT); INSERT INTO session_actor VALUES ('usr_01JB3M7Q8ZK4X2N6V9R5T0W1YD');").unwrap();
     let name = [("institution.name".to_string(), json!("Casa de Reposo Ficticia San Ejemplo"))].into_iter().collect();
     crate::core::profile::forms::save(&mut c, "institution.identity", name, None).unwrap();
     let doc = attach(&mut c, "tax_status_certificate", "constancia-situacion-fiscal.txt");

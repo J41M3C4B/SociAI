@@ -1,16 +1,17 @@
 //! The forms of the institution described as data (ADR-033 §1): what «Mi institución» asks, field by field. The
 //! screen draws them; the words live in `src/i18n/es-MX.ts` under `forms.fields` with the same id.
+//!
+//! The four windows of the profile are not written here: they are the module `mi_institucion` (ERP-1), its windows
+//! over its entity of the dictionary. The screen keeps seeing them as forms, with a field named `institution.` and its
+//! id in the dictionary (`institution.legal_name`). The lists of the institution (its board, its accounts and its
+//! record) are still described here.
 
-use super::catalog::{
-    AGE_GROUPS, BANK_PURPOSES, BOARD_ROLES, BY_PROGRAM, CARE_AREAS, DONEE_CATEGORIES, LEGAL_FORMS, LODGING, MAX_ESTIMATE, MODALITIES, OLDEST_YEAR, POPULATIONS, RECORD_STATUSES,
-    REGISTRY, SEXES_SERVED, STATE_CODES, TAX_REGIMES, UNDER_A_JUNTA,
-};
+use std::sync::LazyLock;
+
+use super::catalog::{BANK_PURPOSES, BOARD_ROLES, RECORD_STATUSES};
 use crate::common::forms::{AiUse, Condition, FieldKind, FieldSpec, FormSpec, Rule, SectionSpec, Sensitivity};
-
-/// The latest year a field of a year may hold; the profile checks it again against the clock.
-const LATEST_YEAR: i64 = 2100;
-/// The oldest a person served can be said to be.
-const MAX_AGE: i64 = 120;
+use mi_institucion::catalog::PROFILE;
+use mi_institucion::windows::{ESSENTIAL, WINDOWS};
 
 /// The institution's own and protected: never to the AI (its contact, address, folios and keys).
 const fn private(f: FieldSpec) -> FieldSpec {
@@ -22,188 +23,151 @@ const fn internal(f: FieldSpec) -> FieldSpec {
     f.sensitivity(Sensitivity::Internal, AiUse::AsIs)
 }
 
-/// What shows only for a donee (`authorized_donee = yes`).
-const DONEE: Condition = Condition::AnyOf { field: "institution.authorized_donee", values: &["yes"] };
-/// What shows once the person said they serve a stage of life: the public at large or other organizations have no
-/// sex nor ages to say.
-const BY_AGE: Condition = Condition::AnyOf { field: "institution.populations", values: AGE_GROUPS };
-/// What shows where people live or spend the day (`LODGING`): the places, and how many people are there today. It
-/// looks at «Su institución» from «Capacidad y cifras».
-const LODGES: Condition = Condition::AnyOf { field: "institution.modalities", values: LODGING };
-/// What shows where people come and go (`BY_PROGRAM`): how many it served in the last year. A residence with
-/// community programs is asked both.
-const COMES_AND_GOES: Condition = Condition::AnyOf { field: "institution.modalities", values: BY_PROGRAM };
+// ------------------------------------------------------------------ the profile, from the module (ERP-1)
 
-/// «Su institución»: who it is and whom and how it serves. The kind the modules go by comes out of the populations.
-pub const IDENTITY: FormSpec = FormSpec {
-    id: "institution.identity",
-    sections: &[
-        SectionSpec {
-            id: "who",
-            columns: 1,
-            fields: &[
-                FieldSpec::new("institution.name", FieldKind::Text).essential().used_by(&["documents", "projects", "ai"]),
-                FieldSpec::new("institution.mission", FieldKind::LongText).essential().used_by(&["projects", "documents", "ai"]),
-            ],
-        },
-        SectionSpec {
-            id: "attention",
-            columns: 1,
-            fields: &[
-                FieldSpec::new("institution.populations", FieldKind::MultiSelect).options(POPULATIONS).essential().used_by(&["care", "hr", "facilities", "projects", "ai"]),
-                FieldSpec::new("institution.sex_served", FieldKind::Select).options(SEXES_SERVED).when(BY_AGE).used_by(&["care", "projects", "ai"]),
-                FieldSpec::new("institution.modalities", FieldKind::MultiSelect).options(MODALITIES).essential().used_by(&["care", "facilities", "projects", "ai"]),
-                FieldSpec::new("institution.care_areas", FieldKind::MultiSelect).options(CARE_AREAS).used_by(&["care", "hr", "projects", "ai"]),
-                FieldSpec::new("institution.services", FieldKind::LongText).used_by(&["projects", "care", "ai"]),
-            ],
-        },
-        SectionSpec {
-            id: "admission",
-            columns: 2,
-            fields: &[
-                FieldSpec::new("institution.age_min", FieldKind::Number).range(0, MAX_AGE).when(BY_AGE).used_by(&["care", "projects", "ai"]),
-                FieldSpec::new("institution.age_max", FieldKind::Number).range(0, MAX_AGE).when(BY_AGE).used_by(&["care", "projects", "ai"]),
-            ],
-        },
-        SectionSpec {
-            id: "admission_rules",
-            columns: 1,
-            fields: &[FieldSpec::new("institution.admission_criteria", FieldKind::LongText).used_by(&["care", "projects", "ai"])],
-        },
-    ],
-};
+/// How the screen names a field of the profile: `institution.` and its id in the dictionary.
+pub const PREFIX: &str = "institution.";
 
-/// «Contacto y ubicación»: how to reach the institution and where it is. Only the municipality and the state reach
-/// the AI; the code puts the rest in the documents.
-pub const CONTACT: FormSpec = FormSpec {
-    id: "institution.contact",
-    sections: &[
-        SectionSpec {
-            id: "contact",
-            columns: 2,
-            fields: &[
-                private(FieldSpec::new("institution.contact_phone", FieldKind::Phone)).used_by(&["documents"]),
-                private(FieldSpec::new("institution.contact_email", FieldKind::Email)).used_by(&["documents"]),
-            ],
-        },
-        SectionSpec {
-            id: "address",
-            columns: 2,
-            fields: &[
-                private(FieldSpec::new("institution.street", FieldKind::Text)).required().used_by(&["documents", "finance"]),
-                private(FieldSpec::new("institution.ext_number", FieldKind::Text)).used_by(&["documents", "finance"]),
-                private(FieldSpec::new("institution.int_number", FieldKind::Text)).used_by(&["documents", "finance"]),
-                private(FieldSpec::new("institution.neighborhood", FieldKind::Text)).used_by(&["documents", "finance"]),
-                private(FieldSpec::new("institution.postal_code", FieldKind::Text)).rule(Rule::PostalCode).required().used_by(&["documents", "finance"]),
-                FieldSpec::new("institution.municipality", FieldKind::Text).rule(Rule::PlaceName).essential().used_by(&["hr", "finance", "projects", "ai"]),
-                FieldSpec::new("institution.state", FieldKind::Select).options(STATE_CODES).essential().used_by(&["hr", "finance", "projects", "ai"]),
-            ],
-        },
-    ],
-};
+/// The id of a field of the profile on the screen (`legal_name` → `institution.legal_name`).
+pub fn screen_id(field: &str) -> String {
+    format!("{PREFIX}{field}")
+}
 
-/// «Datos legales y fiscales»: how the institution stands before the law, the SAT and its Junta.
-pub const LEGAL: FormSpec = FormSpec {
-    id: "institution.legal",
-    sections: &[
-        SectionSpec {
-            id: "legal_identity",
-            columns: 1,
-            fields: &[
-                FieldSpec::new("institution.legal_name", FieldKind::Text).required().used_by(&["documents", "finance", "projects", "ai"]),
-                FieldSpec::new("institution.purpose", FieldKind::LongText).required().used_by(&["projects", "ai"]),
-            ],
-        },
-        SectionSpec {
-            id: "constitution",
-            columns: 2,
-            fields: &[
-                FieldSpec::new("institution.legal_form", FieldKind::Select).options(LEGAL_FORMS).essential().used_by(&["finance", "projects", "ai"]),
-                FieldSpec::new("institution.founded_year", FieldKind::Year).range(OLDEST_YEAR, LATEST_YEAR).essential().used_by(&["projects", "ai"]),
-                private(FieldSpec::new("institution.junta_folio", FieldKind::Text))
-                    .required()
-                    .when(Condition::AnyOf { field: "institution.legal_form", values: UNDER_A_JUNTA })
-                    .used_by(&["finance", "documents"]),
-            ],
-        },
-        SectionSpec {
-            id: "fiscal",
-            columns: 2,
-            fields: &[
-                private(FieldSpec::new("institution.legal_rfc", FieldKind::Text)).rule(Rule::RfcMoral).required().used_by(&["documents", "finance"]),
-                internal(FieldSpec::new("institution.tax_regime", FieldKind::Select)).options(TAX_REGIMES).required().used_by(&["finance", "projects", "ai"]),
-                private(FieldSpec::new("institution.fiscal_postal_code", FieldKind::Text)).rule(Rule::PostalCode).used_by(&["finance", "documents"]),
-            ],
-        },
-        SectionSpec {
-            id: "registries",
-            columns: 2,
-            fields: &[
-                FieldSpec::new("institution.authorized_donee", FieldKind::Select).options(REGISTRY).essential().used_by(&["finance", "projects", "ai"]),
-                FieldSpec::new("institution.cluni", FieldKind::Select).options(REGISTRY).essential().used_by(&["projects", "ai"]),
-                FieldSpec::new("institution.donee_category", FieldKind::Select).options(DONEE_CATEGORIES).when(DONEE).used_by(&["finance", "projects", "ai"]),
-                private(FieldSpec::new("institution.donee_letter_number", FieldKind::Text)).when(DONEE).used_by(&["finance", "documents"]),
-                private(FieldSpec::new("institution.donee_letter_date", FieldKind::Date)).when(DONEE).used_by(&["finance", "documents"]),
-                private(FieldSpec::new("institution.cluni_key", FieldKind::Text))
-                    .when(Condition::AnyOf { field: "institution.cluni", values: &["yes"] })
-                    .used_by(&["projects", "documents"]),
-            ],
-        },
-        SectionSpec {
-            id: "legal_rep",
-            columns: 2,
-            fields: &[
-                private(FieldSpec::new("institution.legal_rep_name", FieldKind::Text)).used_by(&["documents", "projects"]),
-                private(FieldSpec::new("institution.legal_rep_valid_until", FieldKind::Date)).used_by(&["documents", "projects"]),
-            ],
-        },
-    ],
-};
+/// The id in the dictionary of a field of the profile on the screen (`institution.legal_name` → `legal_name`).
+pub fn module_id(id: &str) -> Option<&str> {
+    id.strip_prefix(PREFIX).filter(|f| PROFILE.field(f).is_some())
+}
 
-/// «Capacidad y cifras rápidas»: how many fit (where people stay), and how many are served and work there while their
-/// records are not there yet. The records of the modules win over the quick figures.
-pub const CAPACITY: FormSpec = FormSpec {
-    id: "institution.capacity",
-    sections: &[
-        SectionSpec {
-            id: "capacity_people",
-            columns: 2,
-            fields: &[
-                internal(FieldSpec::new("institution.capacity_total", FieldKind::Number))
-                    .range(0, MAX_ESTIMATE)
-                    .essential()
-                    .when(LODGES)
-                    .used_by(&["care", "facilities", "projects", "ai"]),
-                // two counts, so a number never changes its meaning when the ways it serves change (ERP-2)
-                internal(FieldSpec::new("institution.served_estimate", FieldKind::Number)).range(0, MAX_ESTIMATE).essential().when(LODGES).used_by(&["care", "projects", "ai"]),
-                internal(FieldSpec::new("institution.served_last_year", FieldKind::Number))
-                    .range(0, MAX_ESTIMATE)
-                    .essential()
-                    .when(COMES_AND_GOES)
-                    .used_by(&["projects", "ai"]),
-            ],
-        },
-        SectionSpec {
-            id: "capacity_staff",
-            columns: 2,
-            fields: &[
-                internal(FieldSpec::new("institution.staff_paid_estimate", FieldKind::Number)).range(0, MAX_ESTIMATE).essential().used_by(&["hr", "projects", "ai"]),
-                internal(FieldSpec::new("institution.staff_volunteer_estimate", FieldKind::Number)).range(0, MAX_ESTIMATE).essential().used_by(&["hr", "projects", "ai"]),
-            ],
-        },
-        SectionSpec {
-            id: "capacity_notes",
-            columns: 1,
-            fields: &[internal(FieldSpec::new("institution.notes", FieldKind::LongText)).used_by(&["projects", "ai"])],
-        },
-    ],
-};
+/// The id of a window of the profile on the screen (`legal` → `institution.legal`).
+pub fn screen_form(window: &str) -> String {
+    format!("{PREFIX}{window}")
+}
 
-/// Every form of the core, by id.
-pub const FORMS: &[&FormSpec] = &[&IDENTITY, &CONTACT, &LEGAL, &CAPACITY];
+/// Who uses each datum of the profile: the «what is it for» of the manual. It is about the program, not the datum, so
+/// it is not in the dictionary.
+const USED_BY: &[(&str, &[&str])] = &[
+    ("name", &["documents", "projects", "ai"]),
+    ("mission", &["projects", "documents", "ai"]),
+    ("populations", &["care", "hr", "facilities", "projects", "ai"]),
+    ("sex_served", &["care", "projects", "ai"]),
+    ("modalities", &["care", "facilities", "projects", "ai"]),
+    ("care_areas", &["care", "hr", "projects", "ai"]),
+    ("services", &["projects", "care", "ai"]),
+    ("age_min", &["care", "projects", "ai"]),
+    ("age_max", &["care", "projects", "ai"]),
+    ("admission_criteria", &["care", "projects", "ai"]),
+    ("contact_phone", &["documents"]),
+    ("contact_email", &["documents"]),
+    ("street", &["documents", "finance"]),
+    ("ext_number", &["documents", "finance"]),
+    ("int_number", &["documents", "finance"]),
+    ("neighborhood", &["documents", "finance"]),
+    ("postal_code", &["documents", "finance"]),
+    ("municipality", &["hr", "finance", "projects", "ai"]),
+    ("state", &["hr", "finance", "projects", "ai"]),
+    ("legal_name", &["documents", "finance", "projects", "ai"]),
+    ("purpose", &["projects", "ai"]),
+    ("legal_form", &["finance", "projects", "ai"]),
+    ("founded_year", &["projects", "ai"]),
+    ("junta_folio", &["finance", "documents"]),
+    ("legal_rfc", &["documents", "finance"]),
+    ("tax_regime", &["finance", "projects", "ai"]),
+    ("fiscal_postal_code", &["finance", "documents"]),
+    ("authorized_donee", &["finance", "projects", "ai"]),
+    ("cluni", &["projects", "ai"]),
+    ("donee_category", &["finance", "projects", "ai"]),
+    ("donee_letter_number", &["finance", "documents"]),
+    ("donee_letter_date", &["finance", "documents"]),
+    ("cluni_key", &["projects", "documents"]),
+    ("legal_rep_name", &["documents", "projects"]),
+    ("legal_rep_valid_until", &["documents", "projects"]),
+    ("capacity_total", &["care", "facilities", "projects", "ai"]),
+    ("served_estimate", &["care", "projects", "ai"]),
+    ("served_last_year", &["projects", "ai"]),
+    ("staff_paid_estimate", &["hr", "projects", "ai"]),
+    ("staff_volunteer_estimate", &["hr", "projects", "ai"]),
+    ("notes", &["projects", "ai"]),
+];
+
+/// A name the program keeps for as long as it runs: the forms of the profile are built once, from the module.
+fn kept(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// A field of the dictionary as the screen draws it. What is not public nor internal never reaches the AI.
+fn spec_of(f: &kernel::Field) -> FieldSpec {
+    let kind = match f.kind {
+        kernel::Kind::Text => FieldKind::Text,
+        kernel::Kind::LongText => FieldKind::LongText,
+        kernel::Kind::Number => FieldKind::Number,
+        kernel::Kind::Money => FieldKind::Money,
+        kernel::Kind::Year => FieldKind::Year,
+        kernel::Kind::Date => FieldKind::Date,
+        kernel::Kind::Select => FieldKind::Select,
+        kernel::Kind::MultiSelect => FieldKind::MultiSelect,
+        kernel::Kind::YesNo => FieldKind::YesNo,
+        kernel::Kind::Email => FieldKind::Email,
+        kernel::Kind::Phone => FieldKind::Phone,
+    };
+    let (sensitivity, ai) = match f.class {
+        "public" => (Sensitivity::Public, AiUse::AsIs),
+        "internal" => (Sensitivity::Internal, AiUse::AsIs),
+        "confidential" => (Sensitivity::InstitutionalPrivate, AiUse::Never),
+        _ => (Sensitivity::Personal, AiUse::Never),
+    };
+    let applies_when = match f.applies_when {
+        kernel::Condition::Always => Condition::Always,
+        kernel::Condition::Filled { field } => Condition::Filled { field: kept(screen_id(field)) },
+        kernel::Condition::AnyOf { field, values } => Condition::AnyOf { field: kept(screen_id(field)), values },
+    };
+    FieldSpec {
+        id: kept(screen_id(f.id)),
+        kind,
+        options: f.options,
+        required: f.presence != kernel::Presence::Optional,
+        essential: ESSENTIAL.contains(&f.id),
+        applies_when,
+        sensitivity,
+        ai,
+        used_by: USED_BY.iter().find(|(id, _)| *id == f.id).map_or(&[], |(_, by)| by),
+        min: f.min,
+        max: f.max,
+        rule: f.rule.map(|r| match r {
+            kernel::Rule::PostalCode => Rule::PostalCode,
+            kernel::Rule::RfcMoral => Rule::RfcMoral,
+            kernel::Rule::Clabe => Rule::Clabe,
+            kernel::Rule::PlaceName => Rule::PlaceName,
+        }),
+    }
+}
+
+/// The windows of the profile as forms, built once.
+static PROFILE_FORMS: LazyLock<Vec<&'static FormSpec>> = LazyLock::new(|| {
+    WINDOWS
+        .iter()
+        .map(|w| {
+            let sections: Vec<SectionSpec> = w
+                .sections
+                .iter()
+                .map(|s| SectionSpec {
+                    id: s.id,
+                    columns: s.columns,
+                    fields: Box::leak(s.fields.iter().map(|f| spec_of(PROFILE.field(f).expect("a window shows fields of the catalog"))).collect()),
+                })
+                .collect();
+            &*Box::leak(Box::new(FormSpec { id: kept(screen_form(w.id)), sections: Box::leak(sections.into_boxed_slice()) }))
+        })
+        .collect()
+});
+
+/// Every window of the profile, as a form: `institution.identity`, `institution.contact`, `institution.legal` and
+/// `institution.capacity`.
+pub fn forms() -> &'static [&'static FormSpec] {
+    &PROFILE_FORMS
+}
 
 pub fn form(id: &str) -> Option<&'static FormSpec> {
-    FORMS.iter().copied().find(|f| f.id == id)
+    forms().iter().copied().find(|f| f.id == id)
 }
 
 // ------------------------------------------------------------------ the lists of the institution (ADR-033 §3)
@@ -289,7 +253,7 @@ pub const RECORD: FormSpec = FormSpec { id: "institution.record", sections: &[RE
 /// A document of a type of the catalog: its name comes from the type.
 pub const RECORD_KNOWN: FormSpec = FormSpec { id: "institution.record", sections: &[RECORD_STATE, RECORD_DATES, RECORD_NOTES] };
 
-/// The forms of the lists, one row each: they do not belong to the profile, so they are kept apart from `FORMS`.
+/// The forms of the lists, one row each: they do not belong to the profile, so they are kept apart from `forms()`.
 pub const LIST_FORMS: &[&FormSpec] = &[&BOARD_MEMBER, &BANK_ACCOUNT, &RECORD];
 
 /// The words of the screen (`src/i18n/es-MX.ts`, the one source of the words), read by the program too: the AI is
@@ -327,7 +291,7 @@ pub fn option_label(field: &str, code: &str) -> Option<&'static str> {
         // `code: "Name"`, one per line or several on one line, inside the options of the field
         let pair = regex::Regex::new(r#""?\b([a-z0-9_]+)"?:\s*"([^"]+)""#).unwrap();
         let mut out = HashMap::new();
-        for f in FORMS.iter().chain(LIST_FORMS).flat_map(|f| f.fields()).filter(|f| !f.options.is_empty()) {
+        for f in forms().iter().chain(LIST_FORMS).flat_map(|f| f.fields()).filter(|f| !f.options.is_empty()) {
             let head = format!("\"{}\": {{", f.id);
             let Some(at) = block.find(&head) else { continue };
             let rest = &block[at + head.len()..];
@@ -350,7 +314,7 @@ pub fn option_label(field: &str, code: &str) -> Option<&'static str> {
 
 /// A field of any form of the core, of the profile or of its lists.
 pub fn field(id: &str) -> Option<&'static FieldSpec> {
-    FORMS.iter().chain(LIST_FORMS).find_map(|f| f.field(id))
+    forms().iter().chain(LIST_FORMS).find_map(|f| f.field(id))
 }
 
 #[cfg(test)]
@@ -374,7 +338,7 @@ mod tests {
     fn the_ai_is_shown_each_code_with_its_name_on_the_screen() {
         assert_eq!(option_label("institution.donee_category", "assistance"), Some("Asistencial"));
         assert_eq!(option_label("institution.legal_form", "iap"), option_label("institution.legal_form", "iap").filter(|l| !l.is_empty()));
-        for f in FORMS.iter().flat_map(|f| f.fields()).filter(|f| f.id != "institution.state") {
+        for f in forms().iter().flat_map(|f| f.fields()).filter(|f| f.id != "institution.state") {
             for code in f.options {
                 assert!(option_label(f.id, code).is_some(), "{}: the code {code} has no name for the AI", f.id);
             }
@@ -387,7 +351,7 @@ mod tests {
         let es = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/i18n/es-MX.ts")).unwrap();
         let start = es.find("forms: {").expect("es-MX.ts has a `forms` block");
         let block = &es[start..];
-        for f in FORMS.iter().chain(LIST_FORMS).flat_map(|f| f.fields()) {
+        for f in forms().iter().chain(LIST_FORMS).flat_map(|f| f.fields()) {
             let head = format!("\"{}\": {{", f.id);
             let at = block.find(&head).unwrap_or_else(|| panic!("{} has no words in es-MX.ts (forms.fields)", f.id));
             let rest = &block[at + head.len()..];
@@ -411,7 +375,7 @@ mod tests {
 
     #[test]
     fn the_forms_have_unique_ids() {
-        let ids: Vec<&str> = FORMS.iter().chain(LIST_FORMS).flat_map(|f| f.fields()).map(|f| f.id).collect();
+        let ids: Vec<&str> = forms().iter().chain(LIST_FORMS).flat_map(|f| f.fields()).map(|f| f.id).collect();
         assert!((1..ids.len()).all(|i| !ids[..i].contains(&ids[i])), "{ids:?}");
         assert!(form("institution.identity").is_some() && form("nope").is_none());
         assert!(form("institution.board_member").is_none(), "a list is not a window of the profile");
@@ -420,6 +384,23 @@ mod tests {
         assert!(BANK_ACCOUNT_SAVED.fields().all(|f| BANK_ACCOUNT.field(f.id) == Some(f)) && BANK_ACCOUNT_SAVED.field("institution.bank.clabe").is_none());
         // a document of the catalog asks the same as one the institution names, but its name
         assert!(RECORD_KNOWN.fields().all(|f| RECORD.field(f.id) == Some(f)) && RECORD_KNOWN.field("institution.record.custom_name").is_none());
+    }
+
+    /// The windows of the profile are the module's, field by field: what it asks, when and how protected, and the
+    /// «what is it for» of each one.
+    #[test]
+    fn the_windows_of_the_profile_are_the_modules() {
+        let ids: Vec<&str> = forms().iter().map(|f| f.id).collect();
+        assert_eq!(ids, ["institution.identity", "institution.contact", "institution.legal", "institution.capacity"]);
+        let capacity = field("institution.capacity_total").unwrap();
+        assert!(capacity.required && capacity.essential);
+        assert_eq!(capacity.applies_when.field(), Some("institution.modalities"), "a condition looks at the screen's id");
+        assert!(!field("institution.services").unwrap().required);
+        assert_eq!(module_id("institution.legal_rfc"), Some("legal_rfc"));
+        assert_eq!(module_id("institution.board.name"), None);
+        for f in forms().iter().flat_map(|f| f.fields()) {
+            assert!(!f.used_by.is_empty(), "{}: who uses it?", f.id);
+        }
     }
 
     /// ADR-033 §3: of the board only the roles reach the AI (counted); the names, the CLABE and the rest never.
@@ -434,23 +415,18 @@ mod tests {
         }
     }
 
-    /// The contact, the address, the RFC, the folios and the keys of the institution never reach the AI (ADR-033 §3).
+    /// The contact, the address, the RFC, the folios and the keys of the institution never reach the AI (ADR-033 §3),
+    /// nor the name of its legal representative, a person (ERP-1).
     #[test]
     fn what_is_the_institutions_own_never_reaches_the_ai() {
         for id in [
             "institution.contact_phone", "institution.contact_email", "institution.street", "institution.postal_code", "institution.legal_rfc",
-            "institution.junta_folio", "institution.donee_letter_number", "institution.cluni_key", "institution.legal_rep_name",
+            "institution.junta_folio", "institution.donee_letter_number", "institution.cluni_key",
         ] {
-            let f = FORMS.iter().find_map(|f| f.field(id)).unwrap();
+            let f = field(id).unwrap();
             assert_eq!((f.sensitivity, f.ai), (Sensitivity::InstitutionalPrivate, AiUse::Never), "{id}");
         }
-    }
-
-    /// A field kept as a detail has its column, and every column belongs to a field (`profile::storage::DETAILS`).
-    #[test]
-    fn every_detail_is_a_field_of_a_form() {
-        for (id, _) in crate::core::profile::storage::DETAILS {
-            assert!(FORMS.iter().any(|f| f.field(id).is_some()), "{id} is not in any form");
-        }
+        let rep = field("institution.legal_rep_name").unwrap();
+        assert_eq!((rep.sensitivity, rep.ai), (Sensitivity::Personal, AiUse::Never));
     }
 }

@@ -513,7 +513,7 @@ fn render_attention(s: &mut String, attention: Option<&crate::core::profile::dom
 /// keeps from the AI never comes out of here, whatever the caller asks.
 fn detail<'a>(inst: &'a crate::core::profile::domain::InstitutionInput, id: &str) -> Option<&'a serde_json::Value> {
     use crate::common::forms::AiUse;
-    let allowed = crate::core::institution::forms::FORMS.iter().find_map(|f| f.field(id)).is_some_and(|f| f.ai != AiUse::Never);
+    let allowed = crate::core::institution::forms::forms().iter().find_map(|f| f.field(id)).is_some_and(|f| f.ai != AiUse::Never);
     inst.details.as_ref().and_then(|d| d.get(id)).filter(|v| allowed && crate::common::forms::is_filled(Some(v)))
 }
 
@@ -1052,10 +1052,10 @@ pub(crate) mod tests {
         seed_rich_people(&mut c);
         seed_rich_facilities(&c);
         seed_rich_board(&mut c);
-        profile_store::save(&mut c, input).unwrap();
+        profile_store::save(&mut c, input, &profile_store::fixtures()).unwrap();
         crate::modules::finance::storage::save(&mut c, money).unwrap();
         if confirm {
-            profile_store::confirm(&mut c).unwrap();
+            profile_store::finish_first_start(&c);
         }
         (d, c)
     }
@@ -1205,7 +1205,7 @@ pub(crate) mod tests {
     fn a_section_with_nothing_captured_says_so_instead_of_staying_silent() {
         let input = ProfileInput { institution: InstitutionInput { name: "Casa Vacía".into(), ..Default::default() }, ..Default::default() };
         let (_d, mut c) = db();
-        profile_store::save(&mut c, &input).unwrap();
+        profile_store::save(&mut c, &input, &profile_store::fixtures()).unwrap();
         let ctx = profile_context(&c).unwrap();
         assert!(ctx.contains("BORRADOR"), "{ctx}");
         assert!(ctx.contains("Institución: Casa Vacía (institución de asistencia)."), "{ctx}");

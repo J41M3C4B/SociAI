@@ -1,0 +1,16 @@
+[package]
+name = "mi_institucion"
+version = "0.1.0"
+description = "Mi institución: the profile of the institution, as a module of the ERP (ERP blueprint §4)"
+edition = "2021"
+publish = false
+
+[dependencies]
+kernel = { workspace = true }
+mi_institucion-contract = { path = "contract" }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+# what it publishes: its capabilities, with the contract that sits under the kernel (ADR-003 A2)
+capability = { workspace = true }
+serde = { workspace = true }
+schemars = { workspace = true }

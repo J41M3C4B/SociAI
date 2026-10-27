@@ -14,7 +14,6 @@ pub mod security;
 
 use crate::core::access::service::{CurrentUser, Session};
 use crate::core::access::domain::{need_of, Permission};
-use crate::core::profile::domain::ProfileInput;
 use crate::error::access_message;
 use crate::error::UiError;
 use crate::scanner::guard::Decision;
@@ -91,16 +90,6 @@ pub fn profile_get(session: State<'_, Session>, db: State<Db>) -> Result<Option<
     Ok(service::get_profile(&conn)?)
 }
 
-#[tauri::command]
-pub fn profile_save(session: State<'_, Session>, db: State<Db>,
-    input: ProfileInput,
-    decision: Option<Decision>,
-) -> Result<SaveProfileOutcome, UiError> {
-    guard(&session, "profile_save")?;
-    let mut conn = lock(&db)?;
-    Ok(crate::core::onboarding::service::save_profile_confirmed(&mut conn, input, decision)?)
-}
-
 /// The institution at a glance (ADR-033): the figure of each module, how full it is, the balance and what is missing.
 #[tauri::command]
 pub fn institution_overview(session: State<'_, Session>, db: State<Db>) -> Result<crate::core::overview::InstitutionOverview, UiError> {
@@ -159,13 +148,6 @@ pub fn manual_search(session: State<'_, Session>, db: State<Db>, query: String) 
     guard(&session, "manual_search")?;
     let conn = lock(&db)?;
     Ok(crate::core::manual::search(&conn, &query, 8)?)
-}
-
-#[tauri::command]
-pub fn profile_confirm(session: State<'_, Session>, db: State<Db>) -> Result<ProfileView, UiError> {
-    guard(&session, "profile_confirm")?;
-    let mut conn = lock(&db)?;
-    Ok(service::confirm_profile(&mut conn)?)
 }
 
 /// Looks for a question in the documents of the institution (IA5): by words, with no internet.

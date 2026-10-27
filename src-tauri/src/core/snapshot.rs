@@ -150,7 +150,7 @@ mod tests {
             served_estimate: Some(served),
             ..Default::default()
         };
-        crate::core::profile::storage::save(c, &input).unwrap();
+        crate::core::profile::storage::save(c, &input, &crate::core::profile::storage::fixtures()).unwrap();
     }
 
     #[test]

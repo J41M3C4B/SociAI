@@ -15,7 +15,6 @@ pub mod kinds;
 pub mod quote;
 pub mod rules;
 
-use crate::common::forms::Sensitivity;
 use crate::core::proposals::{self, NewProposal, Origin, ProposeOutcome};
 use crate::core::error::ServiceError;
 use rules::Found;
@@ -69,8 +68,7 @@ pub fn authority(field: &str, kind: Option<&str>) -> i64 {
 
 /// The window of «Mi institución» a field is in.
 pub(crate) fn form_of(field: &str) -> Option<&'static str> {
-    use crate::core::institution::forms::FORMS;
-    FORMS.iter().find(|f| f.field(field).is_some()).map(|f| f.id)
+    crate::core::institution::forms::forms().iter().find(|f| f.field(field).is_some()).map(|f| f.id)
 }
 
 /// Leaves the data of «Mi institución» found in a document as suggestions of their windows, citing the document and
@@ -82,7 +80,7 @@ pub fn propose(conn: &Connection, document_id: &str, kind: Option<&str>, found: 
     let mut kept = 0;
     for f in found.iter().filter(|f| !is_own(f)) {
         let Some(form_id) = form_of(f.field) else { continue };
-        let protected = crate::core::institution::forms::field(f.field).is_some_and(|s| s.sensitivity == Sensitivity::InstitutionalPrivate);
+        let protected = crate::core::institution::forms::field(f.field).is_some_and(|s| s.protected());
         let mut source = json!({ "document_id": document_id, "page": f.page, "rank": authority(f.field, kind), "sha": proposals::fingerprint(&f.value) });
         if !protected {
             source["quote"] = json!(f.line);

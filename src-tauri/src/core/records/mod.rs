@@ -578,7 +578,7 @@ fn write_own(tx: &Connection, id: &str, document_id: &str, found: &[crate::core:
         if f.field == "institution.record.valid_until" && issued.as_deref().is_some_and(|i| days_between(i, value).is_some_and(|d| d < 0)) {
             continue;
         }
-        let protected = crate::core::institution::forms::field(f.field).is_some_and(|s| s.sensitivity == crate::common::forms::Sensitivity::InstitutionalPrivate);
+        let protected = crate::core::institution::forms::field(f.field).is_some_and(|s| s.protected());
         let mut source = json!({ "document_id": document_id, "page": f.page });
         if !protected {
             source["quote"] = json!(f.line);

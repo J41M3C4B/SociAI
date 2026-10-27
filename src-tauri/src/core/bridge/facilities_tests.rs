@@ -111,7 +111,7 @@ fn the_board_crosses_the_stairs_with_the_people_in_a_wheelchair() {
         capacity_total: Some(20),
         ..Default::default()
     };
-    crate::core::profile::storage::save(&mut c, &input).unwrap();
+    crate::core::profile::storage::save(&mut c, &input, &crate::core::profile::storage::fixtures()).unwrap();
     for i in 0..3 {
         let d = crate::modules::care::domain::person::BeneficiaryData { first_names: format!("Persona {i}"), approx_age: Some(85), mobility: Some("wheelchair".into()), status: "active".into(), ..Default::default() };
         crate::modules::care::service::save_person(&mut c, crate::modules::care::domain::catalog::Flavor::ElderlyHome, None, d).unwrap();

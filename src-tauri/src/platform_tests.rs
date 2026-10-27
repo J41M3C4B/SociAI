@@ -94,13 +94,14 @@ fn a_capability_of_a_module_runs_from_end_to_end() {
     muestra::service::apply(&mut conn, &note, None, &kernel::Origin::Person { account: ANA.into() }).unwrap();
     let read = || Content::Invoke { capability: "muestra.leer_nota".into(), input: json!({ "id": id }) };
 
-    // the direction does not have the permission the module defines: the kernel says no
+    // an account whose role the kernel does not know has no permission: the kernel says no
+    ana.0.set("contador");
     let denied = submit(&runtime, &mut conn, None, read());
     assert_eq!(denied.state, TaskState::Denied);
-    assert!(matches!(&denied.body, Body::Error { code, .. } if code == "access_denied"), "{denied:?}");
+    assert!(matches!(&denied.body, Body::Error { code, .. } if code == "unknown_role"), "{denied:?}");
 
-    // the administration does: the module reads the note, without its protected phone
-    ana.0.set("admin");
+    // the direction has the permissions of the modules (ERP-1): the module reads the note, without its protected phone
+    ana.0.set("manager");
     let done = submit(&runtime, &mut conn, None, read());
     assert_eq!(done.state, TaskState::Done, "{done:?}");
     let Body::Data { capability, value } = &done.body else { panic!("{done:?}") };
@@ -109,7 +110,7 @@ fn a_capability_of_a_module_runs_from_end_to_end() {
 
     // and the kernel's audit store tells the life of both tasks, for whom and why
     let moments = moments(&conn, &[&denied.task, &done.task]);
-    assert!(moments.contains(&("task.denied".into(), None, Some("access_denied".into()))), "{moments:?}");
+    assert!(moments.contains(&("task.denied".into(), None, Some("unknown_role".into()))), "{moments:?}");
     assert!(moments.contains(&("task.step".into(), Some("ok".into()), None)), "{moments:?}");
 }
 
@@ -128,9 +129,10 @@ fn a_change_of_a_module_goes_through_the_kernel() {
         input: json!({ "id": id, "title": "Primera nota", "body": null, "phone": "55 1234 5678" }),
     };
 
-    // the direction may not write notes
+    // an account whose role the kernel does not know may not write notes
+    ana.0.set("contador");
     let denied = submit(&runtime, &mut conn, None, save());
-    assert!(matches!(&denied.body, Body::Error { code, .. } if code == "access_denied"), "{denied:?}");
+    assert!(matches!(&denied.body, Body::Error { code, .. } if code == "unknown_role"), "{denied:?}");
 
     // the administration sees the proposal, with the protected phone for her, and approves it
     ana.0.set("admin");
@@ -192,4 +194,45 @@ fn a_module_asks_and_gives_fields_of_the_dictionary() {
     let done = submit(&runtime, &mut conn, Some(&asked.task), Content::Answer { values: json!({ "muestra.note.phone": "55 1234 5678" }) });
     assert_eq!(done.state, TaskState::Done, "{done:?}");
     assert_eq!(done.body, Body::Data { capability: "muestra.contacto_de_nota".into(), value: json!({ "title": "Llamar a la donante", "phone": "55 1234 5678" }) });
+}
+
+/// Mi institución on the platform (ERP-1): what is missing of the profile, saving a window with the kernel's proposal
+/// and the approval of the direction, the name it cannot be saved without asked of the person as a field of the
+/// dictionary, and a window read back with the class of each datum from the catalog.
+#[test]
+fn the_profile_of_the_institution_runs_on_the_platform() {
+    let modules = Modules::discover().unwrap();
+    let mut conn = opened(&modules);
+    let registry = Registry::discover().unwrap();
+    let ana = Ana(Cell::new("manager"));
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere };
+    let invoke = |capability: &str, input: serde_json::Value| Content::Invoke { capability: capability.into(), input };
+
+    // nothing yet: the name comes first, in its window
+    let missing = submit(&runtime, &mut conn, None, invoke("mi_institucion.que_falta", json!({})));
+    let Body::Data { value, .. } = &missing.body else { panic!("{missing:?}") };
+    assert_eq!(value["missing"][0], json!({ "window": "identity", "field": "name" }));
+
+    // a window without the name: the platform asks the person for it, with its kind
+    let asked = submit(&runtime, &mut conn, None, invoke("mi_institucion.guardar_ventana", json!({ "window": "identity", "mission": "Cuidar." })));
+    let Body::Clarification { ask: Ask::Missing { fields }, .. } = &asked.body else { panic!("{asked:?}") };
+    let asked_for: Vec<(&str, &serde_json::Value)> = fields.iter().map(|f| (f.id.as_str(), &f.field["kind"])).collect();
+    assert_eq!(asked_for, [("mi_institucion.profile.name", &json!("text"))]);
+
+    // with the name, the kernel's proposal; approved, the window is saved with the task as its origin
+    let proposed = submit(&runtime, &mut conn, Some(&asked.task), Content::Answer { values: json!({ "mi_institucion.profile.name": "Casa Ficticia" }) });
+    let Body::Proposal { fingerprint, .. } = &proposed.body else { panic!("{proposed:?}") };
+    assert_eq!(mi_institucion::service::profile(&conn).unwrap().version, 0, "nothing before the approval");
+    let done = submit(&runtime, &mut conn, Some(&asked.task), Content::Decision { fingerprint: fingerprint.clone(), approve: true });
+    assert_eq!(done.state, TaskState::Done, "{done:?}");
+    let history = kernel::history(&conn, &mi_institucion::service::profile_ref()).unwrap();
+    assert_eq!(history[0].origin, kernel::Origin::Task { task: asked.task.clone(), account: ANA.into() });
+
+    // the window, back: its data named by their fields, each of the class the catalog declares
+    let read = submit(&runtime, &mut conn, None, invoke("mi_institucion.ver_ventana", json!({ "window": "identity" })));
+    let Body::Data { value, .. } = &read.body else { panic!("{read:?}") };
+    assert_eq!((value["version"].clone(), value["profile"]["name"].clone(), value["profile"]["mission"].clone()), (json!(1), json!("Casa Ficticia"), json!("Cuidar.")));
+    let fields = platform::output_fields(registry.get("mi_institucion.ver_ventana").unwrap(), &modules).unwrap();
+    let class = |f: &str| fields.iter().find(|x| x.field == format!("mi_institucion.profile.{f}")).map(|x| x.class);
+    assert_eq!((class("name"), class("legal_rfc"), class("legal_rep_name"), class("notes")), (Some("public"), Some("confidential"), Some("personal"), Some("internal")));
 }

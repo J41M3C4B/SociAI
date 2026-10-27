@@ -179,6 +179,11 @@ impl FieldSpec {
     pub fn looks_at(&self) -> Option<&'static str> {
         self.applies_when.field()
     }
+
+    /// The institution's own and protected, or a datum of a person: never quoted, never to the AI.
+    pub fn protected(&self) -> bool {
+        matches!(self.sensitivity, Sensitivity::InstitutionalPrivate | Sensitivity::Personal)
+    }
 }
 
 /// A group of fields drawn together, in one or two columns.

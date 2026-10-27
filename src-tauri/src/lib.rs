@@ -17,6 +17,8 @@ mod platform_tests;
 // the sample module, named once so the linker keeps its manifest for the registry (ERP-8)
 #[cfg(test)]
 extern crate muestra;
+// the modules of the program, named so the linker keeps their manifests and capabilities
+extern crate mi_institucion;
 
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -67,6 +69,8 @@ pub fn run() {
             std::fs::create_dir_all(&dir)?;
             let key = storage::get_or_create_db_key()?;
             let mut conn = storage::open_encrypted(&dir.join("sociai.db"), &key)?;
+            // a database of before the modules hands its profile and its history to Mi institución, once (ERP-1)
+            core::profile::adopt::adopt(&mut conn)?;
             // the tables of the platform: its tasks, their steps, approvals and trail (ADR-003 A3)
             platform::migrate(&mut conn)?;
             // the photo of this month (ADR-033 §4): taken again at each opening until the month ends
@@ -97,7 +101,6 @@ pub fn run() {
             commands::access::admin_audit,
             commands::access::admin_recovery_code_new,
             commands::profile_get,
-            commands::profile_save,
             commands::form_get,
             commands::institution_overview,
             commands::form_save,
@@ -118,7 +121,6 @@ pub fn run() {
             commands::app_places,
             commands::proposals_reject,
             commands::manual_search,
-            commands::profile_confirm,
             commands::documents_list,
             commands::documents_search,
             commands::document_emergency_delete,

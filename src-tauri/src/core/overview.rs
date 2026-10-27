@@ -73,7 +73,7 @@ pub struct Suggestions {
 /// The suggestions waiting in each window of «Mi institución», as the window shows them.
 fn suggestions(conn: &Connection) -> Result<Vec<Suggestions>, ServiceError> {
     let mut out = Vec::new();
-    for form in crate::core::institution::forms::FORMS {
+    for form in crate::core::institution::forms::forms() {
         let count = crate::core::profile::forms::get(conn, form.id)?.proposals.len();
         let place = match form.id {
             "institution.contact" => Place::Contact,
@@ -148,7 +148,7 @@ const BOARD: &str = "institution.board";
 fn forms_missing(conn: &Connection) -> Result<(Vec<&'static str>, usize), ServiceError> {
     let mut missing = Vec::new();
     let mut checks: Vec<&'static str> = Vec::new();
-    for spec in crate::core::institution::forms::FORMS {
+    for spec in crate::core::institution::forms::forms() {
         let view = crate::core::profile::forms::get(conn, spec.id)?;
         missing.extend(view.missing);
         let all = crate::core::profile::forms::with_context(&view.values, &view.context);
@@ -309,7 +309,7 @@ mod tests {
             staff_volunteer_estimate: Some(2),
             ..Default::default()
         };
-        crate::core::profile::storage::save(&mut c, &input).unwrap();
+        crate::core::profile::storage::save(&mut c, &input, &crate::core::profile::storage::fixtures()).unwrap();
         let o = institution_overview(&c).unwrap();
         // the quick figures say they are approximate only while their module is shown and has no records (ADR-043)
         let approx = crate::core::modules::shown;

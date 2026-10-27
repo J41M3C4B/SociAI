@@ -101,7 +101,6 @@ pub const COMMANDS: &[(&str, Need)] = &[
     ("admin_recovery_code_new", Need::Permission(Permission::Administer)),
     // the institution
     ("profile_get", Need::Permission(Permission::Use)),
-    ("profile_save", Need::Permission(Permission::Use)),
     ("form_get", Need::Permission(Permission::Use)),
     ("institution_overview", Need::Permission(Permission::Use)),
     ("form_save", Need::Permission(Permission::Use)),
@@ -120,7 +119,6 @@ pub const COMMANDS: &[(&str, Need)] = &[
     ("institution_record_detach", Need::Permission(Permission::Use)),
     ("institution_record_open", Need::Permission(Permission::Use)),
     ("institution_clabe_reveal", Need::Permission(Permission::Use)),
-    ("profile_confirm", Need::Permission(Permission::Use)),
     // the manual of the program (ADR-034): help for anyone who is in, with no data of the institution
     ("manual_entry", Need::Session),
     ("app_places", Need::Session),

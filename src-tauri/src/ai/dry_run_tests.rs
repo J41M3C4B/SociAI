@@ -310,8 +310,7 @@ async fn harness(tune: impl FnOnce(&mut AiSettings)) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let mut conn = open_encrypted(&dir.path().join("t.db"), DB_KEY).unwrap();
     let input: ProfileInput = serde_json::from_str(include_str!("../../../fixtures/institucion-asilo.json")).unwrap();
-    profile::save(&mut conn, &input).unwrap();
-    profile::confirm(&mut conn).unwrap();
+    profile::save_finished(&mut conn, &input);
     let mut settings = AiSettings::default();
     // The chain tests below are about how the chain behaves, not about which model is first by
     // default (that is checked in `settings`), so they run on a fixed chain.

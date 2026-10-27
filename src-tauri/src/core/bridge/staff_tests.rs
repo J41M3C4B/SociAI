@@ -17,7 +17,7 @@ fn conn() -> (tempfile::TempDir, Connection) {
 
 fn with_profile(c: &mut Connection) {
     let input = ProfileInput { institution: InstitutionInput { name: "Asilo Ficticio".into(), kind: InstitutionKind::ElderlyHome, ..Default::default() }, ..Default::default() };
-    profile_store::save(c, &input).unwrap();
+    profile_store::save(c, &input, &profile_store::fixtures()).unwrap();
 }
 
 fn position(c: &Connection, title: &str) -> String {
@@ -218,7 +218,7 @@ fn a_change_in_the_staff_keeps_the_confirmed_profile_and_its_version() {
     // audit D1: registering a person used to open an unconfirmed version, so the sheet of the AI read «BORRADOR»
     let (_d, mut c) = conn();
     with_profile(&mut c);
-    profile_store::confirm(&mut c).unwrap();
+    profile_store::finish_first_start(&c);
     let before = profile_store::load_current(&c).unwrap().unwrap();
     let kitchen = position(&c, "Cocina");
     saved(save_person(&mut c, None, person("Ana", &kitchen, "indefinite", Some(7_000))).unwrap());
