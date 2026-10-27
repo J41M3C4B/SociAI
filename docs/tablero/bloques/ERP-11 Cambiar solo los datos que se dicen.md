@@ -2,13 +2,13 @@
 tipo: bloque
 id: ERP-11
 carril: erp
-estado: listo
+estado: en-curso
 prioridad: alta
 caja: Mi institución; Contratos institucionales
 pedido_por: IA-9
 acuerdo: tecnico
 depende_de: ERP-1
-rama:
+rama: erp/erp-11-cambiar-datos
 adr:
 creado: 2026-10-27
 cerrado:
@@ -34,6 +34,24 @@ Acordado entre los rieles ERP e IA (§4 del modelo de trabajo). El líder puede 
 - [ ] La pantalla y `guardar_ventana` no cambian.
 
 ## Plan
+
+El líder pidió hacerlo antes que el ERP-3 (2026-10-27), para que el IA-9 no espere.
+
+1. **La entrada, en el contrato:** `ChangeInput`, los campos que cambia por su id. Un campo ausente no se toca; un `null` lo vacía.
+2. **El servicio:** `prepare_change` y `apply_change`, con su propio `Changeable` sobre el núcleo.
+   - El borrador es el perfil guardado con lo que trae encima.
+   - Un campo que no es del perfil da `unknown_field`.
+   - Tiene las mismas reglas propias (las edades y el año de fundación) y la misma propuesta del núcleo que guardar una ventana. Las dos comparten cómo se arma la propuesta.
+3. **La capacidad `mi_institucion.cambiar_datos`:**
+   - su entrada es tipada: cada campo del perfil con su `x-field`, y el esquema no admite otros;
+   - lo indispensable que falta (el nombre, en un perfil nuevo) se pide a la persona con `CapabilityError::needs`, como en `guardar_ventana`;
+   - una entrada sin campos es `Invalid`, para que no llegue a la persona una propuesta vacía;
+   - `Profile` (la salida de hoy) y la entrada nueva salen de una sola lista de campos, para que no se desfasen. Una prueba revisa que esa lista sea el catálogo.
+4. **Las pruebas:**
+   - del servicio: solo cambia lo que trae, el `null` vacía, lo que deja de aplicar se vacía y se ve en la propuesta, y el campo desconocido no pasa;
+   - de la capacidad, por el registro, sin la plataforma;
+   - la prueba de conformidad la revisa sola, y `workspace_tests` la cuenta entre las de Mi institución.
+5. **La suite completa y el PR.** Al riel IA se le avisa en cuanto esté en revisión, porque el PR fija el contrato.
 
 ## Cómo probarlo
 

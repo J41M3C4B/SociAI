@@ -2,12 +2,12 @@
 tipo: bloque
 id: ERP-3
 carril: erp
-estado: en-curso
+estado: listo
 prioridad: media
 caja: Eventos y tareas automáticas; Servicios deterministas
 pedido_por:
 depende_de: IA-2, ERP-1
-rama: erp/erp-3-calendario-de-vencimientos
+rama:
 adr:
 creado: 2026-10-20
 cerrado:
@@ -29,7 +29,7 @@ Los avisos salen por la entrega común de resultados.
 
 ## Terminado cuando
 
-Aprobado por el líder el 2026-10-27.
+Aprobado por el líder el 2026-10-27, con las decisiones D1 a D5 del «Plan» como se recomendaban. El líder pidió hacer antes el [[ERP-11 Cambiar solo los datos que se dicen|ERP-11]], para que el IA-9 no espere; este bloque se toma en cuanto el ERP-11 pase a revisión.
 
 - [ ] Un módulo declara sus obligaciones como reglas, y el núcleo calcula sin IA qué vence, cuándo y qué falta para cumplirlo.
 - [ ] Con los datos de Mi institución, el programa sabe las cuatro fechas de arriba.
@@ -84,7 +84,7 @@ Aprobado por el líder el 2026-10-27.
 - la opinión de cumplimiento, que no tiene una fecha fija;
 - la vigencia que trae un documento (K6, Documentos): cuando llegue, la constancia dará su fecha y el campo de D1 se llenará de ahí.
 
-**Las decisiones del líder:**
+**Las decisiones del líder** (2026-10-27: las cinco, como se recomendaban):
 
 | | Decisión | Se recomienda | Por qué |
 |---|---|---|---|
