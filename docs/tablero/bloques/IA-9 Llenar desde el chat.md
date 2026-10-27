@@ -7,7 +7,7 @@ prioridad: alta
 caja: Operadores de IA; Políticas de datos y PII; Confirmaciones humanas
 pedido_por:
 acuerdo:
-depende_de: IA-4
+depende_de: IA-4, ERP-11
 rama:
 adr: ADR-005
 creado: 2026-10-27
@@ -69,7 +69,11 @@ Hoy, con la tabla del ADR-004, «mi RFC es…» detiene el chat (hallazgo del IA
    4. las marcas vuelven a su valor dentro de la entrada;
    5. `prepare` da la propuesta, con evidencia `Person`, y la tarea espera la aprobación;
    6. con la aprobación se aplica con la huella (IA-7).
-4. **Cambiar solo lo que se dijo.** Hoy guardar una ventana de Mi institución vacía los campos que no trae. Para llenar un dato, la plataforma tendría que leer y mandar los demás, y no debe. **Pedido técnico al riel ERP:** que Mi institución publique un cambio que solo toque los campos que trae. Se acuerda por mensaje mientras se hace el IA-4, para que llegue listo.
+4. **Cambiar solo lo que se dijo.** Hoy guardar una ventana de Mi institución vacía los campos que no trae. Para llenar un dato, la plataforma tendría que leer y mandar los demás, y no debe. **Pedido técnico al riel ERP, acordado el 2026-10-27:** el [[ERP-11 Cambiar solo los datos que se dicen|ERP-11]], en «Listo» con `acuerdo: tecnico`.
+   - **Qué hace:** Mi institución publica `mi_institucion.cambiar_datos`, un cambio con aprobación.
+     - Su entrada nombra cada campo del perfil, de cualquier ventana: un campo que no viene no se toca, y un `null` explícito lo vacía.
+     - Se prepara y se aplica con el ERP-9, como `guardar_ventana`.
+   - **Lo que queda del lado del IA-9:** el escáner del texto libre, que hoy corre la app antes de guardar (D2 del ERP-1). Lo que llega por el chat lo revisa la plataforma.
 5. **La batería y la corrida real** ganan los casos de llenar.
 
 **Lo que no entra:** llenar desde un documento (un acta, una constancia). Espera a que los documentos sean capacidades del núcleo (K6). El camino será el mismo operador, con el documento en vez del texto.
