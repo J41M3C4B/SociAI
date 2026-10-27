@@ -205,7 +205,7 @@ fn the_profile_of_the_institution_runs_on_the_platform() {
     let mut conn = opened(&modules);
     let registry = Registry::discover().unwrap();
     let ana = Ana(Cell::new("manager"));
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere };
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, provider: None };
     let invoke = |capability: &str, input: serde_json::Value| Content::Invoke { capability: capability.into(), input };
 
     // nothing yet: the name comes first, in its window
