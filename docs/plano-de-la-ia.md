@@ -151,7 +151,7 @@ La política (P10) vigila cuatro puntos: antes del enrutador, al armar el contex
 | **P8** | Aprobación | Confirmaciones humanas | Guarda la propuesta pendiente, atada a su huella. Solo una acción de la persona, con su sesión, la aprueba; la decisión de un agente nunca cuenta. Si la huella cambia, se pide otra vez. | La propuesta y la huella del ERP-9. |
 | **P9** | Entrega | Entrega de resultados | El contrato común de resultados (§6) y sus canales. Antes de entregar revisa otra vez el permiso y la política de salida. Lo que llega después se consulta por el id de la tarea o se avisa. | — |
 | **P10** | Política de datos | Clasificación de datos; políticas de datos y PII | Una sola decisión: dado un dato con su clase, un destino y una finalidad, dice si va, si va tapado, si va solo como agregado o si no va. Se aplica en cuatro puntos (§9). Incluye el detector local (hoy, el escáner) y la bóveda de marcas. Las clases y su tabla las fija el ADR del IA-3. | K3, la clase de cada campo. K2, qué clases ve cada rol. |
-| **P11** | Modelos y proveedores | Operadores de IA (capa 4) | Los proveedores intercambiables, el modelo de cada nivel, los precios, el ritmo y el tope de gasto. Cada proveedor declara su nivel (pagado o gratuito) y sus condiciones, y la política los usa. Solo el ejecutor lo llama. | — |
+| **P11** | Modelos y proveedores | Operadores de IA (capa 4) | Los proveedores intercambiables, el modelo de cada nivel, los precios, el ritmo y el tope de gasto. Cada proveedor declara sus condiciones (encargado, o sin condiciones verificadas; ADR-004), y la política las usa. Solo el ejecutor lo llama. | — |
 | **P12** | Auditoría de las tareas | Auditoría y trazabilidad | Escribe en el almacén del núcleo la apertura, cada paso, cada denegación, cada aprobación y el cierre, con el id de la tarea y sin datos personales. También el uso de los modelos (hoy `ai_usage`). | K9. |
 
 ### Un recorrido completo: un cambio pedido en el chat
@@ -337,16 +337,18 @@ Los aprobó el líder con el plano (2026-10-21). Están juntos en el pedido **ER
 La política es **una sola decisión**, que se puede probar sin modelo: dada la clase de un dato, un destino y una finalidad, dice si va, si va tapado, si va solo como agregado o si no va.
 
 - **Los destinos:**
-  - un modelo de un proveedor pagado;
-  - un modelo de un proveedor gratuito;
+  - el modelo de un encargado;
+  - el modelo de un proveedor sin condiciones verificadas;
   - la pantalla de la persona;
   - un aviso;
   - la auditoría.
-- **Las clases y los valores de la tabla** los fija el ADR del IA-3. El punto de partida es el de la investigación (§4.4):
-  - lo público o de la institución, que va, y solo a un proveedor pagado;
-  - lo propio protegido (RFC, CLABE, folios), que solo leen las reglas;
-  - lo personal de terceros, que nunca va;
-  - lo sensible, que nunca va, y a lo más como agregado de 3 o más.
+- **Las clases y los valores de la tabla** los fija el [ADR-004](adr/ADR-004-las-clases-de-datos-y-la-politica.md) (IA-3):
+  - las cinco clases del diccionario;
+  - los proveedores según sus condiciones: un encargado, o uno sin condiciones verificadas;
+  - las finalidades `responder`, `enrutar` y `redactar`;
+  - la tabla y sus reglas.
+
+  El destino depende de las condiciones del proveedor, no de si se le paga. El plan gratuito de Gemini solo existe en desarrollo, con los datos ficticios de `fixtures/`.
 
 | Punto | Qué revisa | Si no pasa |
 |---|---|---|
@@ -366,7 +368,7 @@ Mismos veredictos que [el código frente a los planos](codigo-frente-a-los-plano
 | Código | Va a | Veredicto |
 |---|---|---|
 | `capability/` (contrato, macro y registro) | P3 y el *crate* `capability` | **Refactor:** se muda a su *crate* (IA-5) y nombra el permiso por su id. La forma del contrato no cambia. |
-| `ai/settings.rs`, `anthropic.rs`, `gemini.rs`, `paced.rs`, `metrics.rs` | P11 | **Se conservan.** Cada proveedor agrega su nivel (pagado o gratuito) para la política. |
+| `ai/settings.rs`, `anthropic.rs`, `gemini.rs`, `paced.rs`, `metrics.rs` | P11 | **Se conservan.** Cada proveedor declara sus condiciones para la política (ADR-004). |
 | `ai/pipeline.rs` | La llamada al modelo dentro del ejecutor (P7, P11) | **Refactor:** el tope mensual pasa a ser una reserva de la tarea, y `ai_usage` lleva el id de la tarea. |
 | `ai/agent.rs` | El agente (P5) | **Refactor:** sus herramientas pasan a ser capacidades invocadas por el ejecutor, y lo para la tarea. Así se cierra la falla del ciclo sin fin que ya se comprobó. |
 | `ai/vault.rs` | P10, la bóveda | **Se conserva.** Se usa solo cuando la política dice «va tapado». |
@@ -393,7 +395,7 @@ El esqueleto primero, sin modelo, probado con **una** capacidad de punta a punta
 | 1 | **IA-6 · El plano de la IA y su ADR** (este documento) | El líder aprueba el plano y las decisiones de la §12, y el ADR-003 las recoge. |
 | 2 | **IA-2 · El esqueleto sin IA** (P1, P2, P7, P8, P9, P12) | <ul><li>Una petición de pantalla recorre runtime → tarea → ejecutor → entrega con una capacidad de muestra.</li><li>Los límites cortan una tarea que no avanza.</li><li>Todo cierre se registra.</li><li>La aprobación va atada a la entrada (y a la huella cuando llegue el ERP-9).</li><li>Las tareas se guardan en la base.</li></ul> |
 | 3 | **IA-5 · El contrato y la plataforma como *crates*** (A1, A2), después del ERP-8 | El módulo de muestra declara una capacidad desde su *crate*, con un permiso suyo, y el compilador impide que el núcleo o un módulo usen la plataforma. |
-| 4 | **IA-3 · Las clases y la política** (P10) | El ADR de las clases; la política en los cuatro puntos; un proveedor gratuito no recibe datos personales ni confidenciales. |
+| 4 | **IA-3 · Las clases y la política** (P10) | El ADR de las clases (ADR-004); la política en los cuatro puntos; un proveedor sin condiciones verificadas solo recibe lo público. |
 | 5 | **IA-4 · El enrutador, el primer operador y el contexto mínimo** (P4, P6, P11) | «¿Qué me falta?», escrito en el chat, llega a la capacidad de Mi institución y vuelve con evidencia. Depende del ERP-1 y del DIS-1. |
 | 6 | **El agente sobre el ejecutor y la batería** (P5) | Un objetivo de varios pasos con capacidades como herramientas, detenido por la tarea, y medido con la batería por categorías. |
 | 7 | **Reacciones a hechos y avisos** (A7), con el ERP-3 | Un vencimiento abre una tarea, corre su flujo y avisa por la entrega común. |
@@ -425,3 +427,4 @@ Las siete se aprobaron como se recomendaban. Las recoge el [ADR-003](adr/ADR-003
 |---|---|
 | 2026-10-21 | Primera versión, aprobada con las decisiones A1 a A7 (IA-6, ADR-003). Lo que toca al ERP se pidió en el ERP-10. |
 | 2026-10-21 | El *crate* de la plataforma se llama `platform`, no `ai`: la app todavía tiene su módulo `ai/` con lo viejo, y los dos nombres chocarían (IA-5). |
+| 2026-10-25 | La §3 (P11), la §9, la §10 y la §11 remiten al ADR-004 (IA-3): el destino depende de las condiciones del proveedor (encargado o sin verificar), no de si se le paga. |

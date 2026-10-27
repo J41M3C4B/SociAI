@@ -6,7 +6,7 @@ fn scanner() -> RegexScanner {
 }
 
 fn fixture(name: &str) -> String {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/escaner").join(name))
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/escaner").join(name))
         .unwrap()
 }
 

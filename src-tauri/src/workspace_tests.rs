@@ -6,9 +6,10 @@
 //! the `contract` of a module, and a contract uses only the kernel and other contracts. The app (the shell, with the
 //! code from before the modules) may use them all, and nothing uses it.
 //!
-//! The two crates of the AI rail keep their own rules (ADR-003): the capability contract uses nothing of the
-//! workspace and anyone may use it (A2), and the platform uses the contract and the kernel, and only the app uses it
-//! (A1).
+//! The crates of the AI rail keep their own rules: the capability contract uses nothing of the workspace and anyone
+//! may use it (ADR-003 A2); the platform uses the contract and the kernel, and only the app uses it (A1); the local
+//! detector and the vault (`privacy`) use nothing of the workspace, and only the app and the platform use them
+//! (ADR-004).
 //!
 //! **The conformance test** runs on every registered module, with no line written for each one.
 
@@ -30,6 +31,8 @@ enum Crate {
     Capability,
     /// `crates/platform`: the AI platform (ADR-003).
     Platform,
+    /// `crates/privacy`: the local detector and the vault (ADR-004).
+    Privacy,
     /// Anywhere else: not a shape the blueprint knows.
     Outside(String),
 }
@@ -47,6 +50,7 @@ fn kind(root: &Path, dir: &Path) -> Crate {
         ["crates", "modules", id, "contract"] => Contract(id.to_string()),
         ["crates", "capability"] => Capability,
         ["crates", "platform"] => Platform,
+        ["crates", "privacy"] => Privacy,
         _ => Outside(parts.join("/")),
     }
 }
@@ -56,9 +60,13 @@ fn may_use(from: &Crate, to: &Crate) -> bool {
     match (from, to) {
         (_, App | Outside(_)) | (Outside(_), _) => false,
         (App, _) => true,
+        // the detector and the vault use nothing of the workspace; the app and the platform use them (ADR-004)
+        (Privacy, _) => false,
         // the contract is the lowest crate, and everyone may use it (ADR-003 A2)
         (Capability, _) => false,
         (_, Capability) => true,
+        (Platform, Privacy) => true,
+        (_, Privacy) => false,
         // the platform uses the contract and the kernel; only the app uses it (ADR-003 A1)
         (Platform, Kernel) => true,
         (Platform, _) | (_, Platform) => false,
@@ -126,12 +134,15 @@ fn the_rules_of_the_boundaries() {
     assert!(may_use(&Platform, &Kernel) && !may_use(&Platform, &module("proyectos")) && !may_use(&Platform, &contract("proyectos")));
     assert!(!may_use(&Kernel, &Platform) && !may_use(&module("proyectos"), &Platform) && !may_use(&contract("proyectos"), &Platform), "only the app uses the platform");
     assert!(may_use(&App, &Platform));
+    assert!(may_use(&App, &Privacy) && may_use(&Platform, &Privacy) && !may_use(&Privacy, &Kernel) && !may_use(&Privacy, &Capability));
+    assert!(!may_use(&Kernel, &Privacy) && !may_use(&module("proyectos"), &Privacy), "only the app and the platform use the detector");
     let root = Path::new("/w");
     assert_eq!(kind(root, Path::new("/w")), App);
     assert_eq!(kind(root, Path::new("/w/crates/modules/contabilidad/contract")), contract("contabilidad"));
     assert_eq!(kind(root, Path::new("/w/crates/otros")), Outside("crates/otros".into()));
     assert_eq!(kind(root, Path::new("/w/crates/platform")), Platform);
     assert_eq!(kind(root, Path::new("/w/crates/capability")), Capability);
+    assert_eq!(kind(root, Path::new("/w/crates/privacy")), Privacy);
 }
 
 /// The linker may drop a crate nobody names, and its manifest with it: each module the app links must be in the

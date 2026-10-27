@@ -18,7 +18,8 @@ pub(crate) mod paced;
 pub mod pipeline;
 pub mod prompts;
 pub mod settings;
-pub mod vault;
+// the vault moved with the detector to the `privacy` crate (ADR-004)
+pub use privacy::vault;
 
 #[cfg(test)]
 pub mod golden;

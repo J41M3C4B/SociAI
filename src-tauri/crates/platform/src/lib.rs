@@ -5,13 +5,15 @@
 //! here, by code.
 //!
 //! It uses the capability contract and the kernel, and no module: it finds the capabilities in the registry, asks the
-//! kernel whether an account may (K2), and leaves the life of each task in the kernel's audit store (K9). Nothing
+//! kernel whether an account may (K2), and leaves the life of each task in the kernel's audit store (K9). What may go
+//! where is one decision, its policy (ADR-004), with the local detector and the vault of `privacy`. Nothing
 //! here knows the screens or Tauri: the app gives the runtime who the account is now, the clock and where to deliver.
 //! Neither the kernel nor a module can use this crate: it does not compile.
 
 pub mod dictionary;
 mod executor;
 pub mod outcome;
+pub mod policy;
 pub mod request;
 pub mod store;
 pub mod task;
@@ -72,6 +74,8 @@ pub struct Runtime<'a> {
     pub accounts: &'a dyn Accounts,
     pub clock: &'a dyn Clock,
     pub deliver: &'a dyn Deliver,
+    /// The provider of models the institution uses, with its conditions (ADR-004 §2); none while there is none.
+    pub provider: Option<&'a policy::Provider>,
 }
 
 impl Runtime<'_> {

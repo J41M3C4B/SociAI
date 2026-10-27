@@ -11,6 +11,8 @@ use crate::error::UiError;
 use crate::Db;
 use capability::Registry;
 use kernel::Modules;
+use crate::ai::settings::ProviderKind;
+use platform::policy::{Conditions, Provider};
 use platform::{Accounts, Deliver, Outcome, Request, Runtime, SystemClock, Who};
 
 /// The account as it is now, for the kernel: only while the session is open, not locked and of this same account.
@@ -26,6 +28,17 @@ impl Accounts for SessionAccounts<'_> {
         }
         crate::core::access::service::account(conn, who.account).ok().flatten()
     }
+}
+
+/// The provider of models the institution uses, with its conditions (ADR-004 §2). Anthropic and Gemini are processors:
+/// in production only their paid APIs exist, run by SociAI, and the free plan of Gemini is only for development, with
+/// the fictitious data of `fixtures/`. A new provider has to say its conditions here.
+fn provider(conn: &Connection) -> Option<Provider> {
+    let kind = crate::ai::settings::load(conn).ok()?.provider;
+    let conditions = match kind {
+        ProviderKind::Gemini | ProviderKind::Anthropic => Conditions::Processor,
+    };
+    Some(Provider { id: kind.as_str().into(), conditions })
 }
 
 /// Every outcome is also heard by the window, so the person does not have to stay on the screen that asked.
@@ -52,7 +65,9 @@ pub fn runtime_submit(
     // one database per institution (ADR-002, D4): the organization is the institution of the base
     let organization = crate::core::institution::id(&conn).unwrap_or_default();
     let accounts = SessionAccounts { session: &session };
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &accounts, clock: &SystemClock, deliver: &Window(app) };
+    let provider = provider(&conn);
+    let deliver = Window(app);
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &accounts, clock: &SystemClock, deliver: &deliver, provider: provider.as_ref() };
     runtime.submit(&mut conn, &Who { account: &user.id, organization: &organization }, request).map_err(|_| UiError::internal())
 }
 
@@ -71,6 +86,7 @@ pub fn runtime_task(
     let conn = lock(&db)?;
     let organization = crate::core::institution::id(&conn).unwrap_or_default();
     let accounts = SessionAccounts { session: &session };
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &accounts, clock: &SystemClock, deliver: &Window(app) };
+    // asking for a task sends nothing to a model
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &accounts, clock: &SystemClock, deliver: &Window(app), provider: None };
     runtime.task(&conn, &Who { account: &user.id, organization: &organization }, &task).map_err(|_| UiError::internal())
 }

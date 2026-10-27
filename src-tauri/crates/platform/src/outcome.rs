@@ -25,8 +25,14 @@ pub struct Outcome {
 pub enum Body {
     /// A text for the person and where each datum of it comes from. The operators of IA-4 write it.
     Answer { text: String, evidence: Vec<Evidence> },
-    /// What a capability gave, for a screen.
-    Data { capability: String, value: Value },
+    /// What a capability gave, for a screen: what the policy let it hand over, and the paths it took out, never their
+    /// values (ADR-004).
+    Data {
+        capability: String,
+        value: Value,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        withheld: Vec<String>,
+    },
     /// The task paused: something to give or to correct.
     Clarification { capability: String, ask: Ask },
     /// A change prepared and waiting for the person, tied to its fingerprint.

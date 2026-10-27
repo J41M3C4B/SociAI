@@ -48,11 +48,9 @@ impl Channel {
 pub enum Content {
     /// A screen names the capability and its input: a deterministic flow, with no router and no model (ADR-003 A4).
     Invoke { capability: String, input: Value },
-    /// What the person wrote in the chat. It needs the router, which comes with IA-4.
-    Text {
-        #[allow(dead_code)] // the router reads it (IA-4)
-        text: String,
-    },
+    /// What the person wrote in the chat. The policy looks at it first (ADR-004); then it needs the router, which comes
+    /// with IA-4.
+    Text { text: String },
     /// The person answers what a paused task asked: the values join the input the task waits with. To fields of the
     /// dictionary, each value goes under the full id of its field (`muestra.note.phone`).
     Answer { values: Value },

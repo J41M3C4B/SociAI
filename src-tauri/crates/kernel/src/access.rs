@@ -23,8 +23,8 @@ pub const GENERAL: &[Permission] = &[
     Permission { id: "kernel.administrar", description: "El panel de administración: las cuentas, las solicitudes y la bitácora." },
 ];
 
-/// The classes of data, by id. These are the ones of today (`DataClass` of the capability contract); the definitive
-/// ones come with the ADR of IA-3.
+/// The classes of data, by id, the same as `DataClass` of the capability contract. What each one allows is fixed by
+/// ADR-004 and decided by the platform's policy (IA-3).
 pub const CLASSES: &[&str] = &["public", "internal", "confidential", "personal", "sensitive_personal"];
 
 /// The classes whose values the history keeps. A field of any other class is protected: its history says it changed,
