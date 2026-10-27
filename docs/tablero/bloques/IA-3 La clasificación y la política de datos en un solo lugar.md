@@ -2,7 +2,7 @@
 tipo: bloque
 id: IA-3
 carril: ia
-estado: revision
+estado: hecho
 prioridad: media
 caja: Clasificación de datos; Políticas de datos y PII
 pedido_por:
@@ -10,7 +10,7 @@ depende_de: IA-2, IA-8
 rama: ia/ia-3-clases-y-politica
 adr: ADR-004
 creado: 2026-10-20
-cerrado:
+cerrado: 2026-10-26
 ---
 
 ## Qué y por qué
@@ -41,7 +41,7 @@ Incluye la regla del proveedor: los términos del plan gratuito de Gemini prohí
 
 Aprobado por el líder el 2026-10-25, con las decisiones C1 a C5 de abajo y su cambio a la C4. Las casillas se marcan cuando cada punto queda hecho.
 
-- [ ] **El ADR-004 fija las clases y su tabla:** las cinco clases que ya usa el diccionario, los destinos, las finalidades y qué permite cada combinación. El líder lo aprueba.
+- [x] **El ADR-004 fija las clases y su tabla:** las cinco clases que ya usa el diccionario, los destinos, las finalidades y qué permite cada combinación. El líder lo aprueba.
 - [x] **La política es una sola decisión, en la plataforma** (`platform::policy`). Dada la clase, el destino y la finalidad, dice si el dato va, va tapado, va solo como agregado o no va. Es una tabla de datos, y una prueba la recorre completa sin modelo.
 - [x] **Cada proveedor declara sus condiciones**, y la política las lee. Puede ser un encargado, o un proveedor sin condiciones verificadas. Ser encargado quiere decir que no entrena con lo que recibe, lo borra y lo guarda confidencial (LFPDPPP; Reglamento, art. 52).
   - Anthropic y Gemini son encargados: en producción solo existen sus APIs de pago, que administra el líder.
@@ -208,6 +208,22 @@ PR [#34](https://github.com/J41M3C4B/SociAI/pull/34). Si el #33 (ERP-1) entra an
 - **El detector de la plataforma no usa «frases seguras».** Un lugar con nombre de persona («Casa Hogar San José») se tapa como un nombre, o detiene el texto con un proveedor sin condiciones verificadas. Esas falsas alarmas se miden con la batería del IA-4.
 - **SubQ:** cuando entre al código como proveedor, se pide su retención cero (sin ella guarda a lo más 60 días) y se declara encargado.
 - **El aviso de privacidad** debe decir qué hacemos con los datos, incluido que un proveedor de IA los trata como encargado. Es del líder.
-- **El contacto de la institución como `confidential`** fue una decisión del ERP-1, no de esta propuesta. Con la tabla del ADR-004, ningún modelo lo verá. Lo decide el líder en el ERP-1.
+- **El contacto de la institución como `confidential`** fue una decisión del ERP-1, no de esta propuesta. Con la tabla del ADR-004, ningún modelo lo verá. Lo decide el líder en el ERP-1. **Decidido (2026-10-26):** el contacto y la dirección se quedan en `confidential`.
 
 ## Resultado
+
+Validado por el líder el 2026-10-26: `cargo test` pasa completo, la app arranca igual que antes, y aprobó el ADR-004. Después de fusionar el #33 (ERP-1), el `rebase` entró sin conflictos. Hubo un solo ajuste: la prueba nueva de Mi institución en `src/platform_tests.rs` le da al `Runtime` su `provider: None`. Con eso pasan 711 pruebas de Rust (15 ignoradas, las que gastan) y 224 del frontend. Fusionado a `main` en el PR [#34](https://github.com/J41M3C4B/SociAI/pull/34) (`3433154`).
+
+- **Las clases y la tabla:**
+  - el [ADR-004](../../adr/ADR-004-las-clases-de-datos-y-la-politica.md) fija las cinco clases del diccionario, los proveedores según sus condiciones (encargado o sin verificar), las finalidades y la tabla con sus reglas;
+  - `platform::policy::decide` es la única decisión, y `the_table_of_the_adr` la recorre completa.
+- **Los cuatro puntos:**
+  - **la previa** termina con `not_for_this_provider` lo que no puede ir;
+  - **`ToModel`** solo lo arma `policy::to_model`, y una prueba `compile_fail` lo demuestra;
+  - **la ejecución** deniega con `class_not_seen`;
+  - **la salida** se filtra campo por campo, y dice qué rutas quitó (`withheld`).
+- **El detector y la bóveda** viven en el *crate* `privacy`. La app los sigue nombrando igual.
+- **Lo que sigue:**
+  - el IA-4 llama al modelo solo con un `ToModel`;
+  - dibujar `withheld` y los textos de `class_not_seen` y `not_for_this_provider` es del riel de diseño;
+  - SubQ se declara encargado, con retención cero, cuando entre al código.
