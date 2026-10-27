@@ -45,6 +45,8 @@ pub fn run() {
                 platform::unknown_permissions(&registry, &modules),
                 platform::changes_without_proposal(&registry),
                 platform::outputs_outside_dictionary(&registry, &modules),
+                // only the platform declares an operator `ia.…` (ADR-003 A6)
+                platform::capabilities_named_as_operators(&registry),
             ]
             .concat();
             if !faults.is_empty() {

@@ -6,7 +6,11 @@
 pub mod agent;
 pub mod anthropic;
 pub mod canonical;
-pub mod figures;
+#[cfg(test)]
+mod chat_battery;
+// the figure check is the validation of an output, and moved to the platform (IA-4, P7); the app's tests still use it
+#[cfg(test)]
+pub use platform::figures;
 pub mod gemini;
 #[cfg(test)]
 pub mod gemini_native;
@@ -16,6 +20,7 @@ pub mod mock;
 #[cfg(test)]
 pub(crate) mod paced;
 pub mod pipeline;
+pub mod platform_models;
 pub mod prompts;
 pub mod settings;
 // the vault moved with the detector to the `privacy` crate (ADR-004)
@@ -62,6 +67,9 @@ pub enum AiTask {
     /// One step of an agent (ADR-034): it asks for a tool or gives its answer. The agent says its name (the task in
     /// `ai_usage`, `agent.<name>`) and its tier; its prompt and schema come with the call (`pipeline::Custom`).
     Agent { name: &'static str, tier: ModelTier },
+    /// One call of an operator of the platform (IA-4, A6): it brings its prompt and its schema (`pipeline::Custom`),
+    /// and `ai_usage` keeps its id (`ia.enrutar`).
+    Operator { id: &'static str, tier: ModelTier },
     /// The vectors of the fragments of the documents of the institution, or of a question to look for in them (IA5,
     /// ADR-034 §3): no prompt and no answer to validate, only text that was already through the scanner.
     Embed,
@@ -91,6 +99,7 @@ impl AiTask {
             AiTask::CallCanonical => "call.canonical",
             AiTask::CallBrief => "call.brief",
             AiTask::Agent { name, .. } => name,
+            AiTask::Operator { id, .. } => id,
             AiTask::Embed => "embed.records",
         }
     }
@@ -104,7 +113,7 @@ impl AiTask {
             | AiTask::DraftingPlan
             | AiTask::DraftingAll
             | AiTask::CallCanonical => ModelTier::Strong,
-            AiTask::Agent { tier, .. } => tier,
+            AiTask::Agent { tier, .. } | AiTask::Operator { tier, .. } => tier,
         }
     }
 
@@ -113,7 +122,7 @@ impl AiTask {
     pub fn timeout_secs(self) -> u64 {
         match self {
             AiTask::Embed => 30,
-            AiTask::ConversationTurn | AiTask::CallBrief | AiTask::Agent { .. } => 60,
+            AiTask::ConversationTurn | AiTask::CallBrief | AiTask::Agent { .. } | AiTask::Operator { .. } => 60,
             AiTask::DiagnosisSummary | AiTask::PrioritizationProposeNeeds | AiTask::DraftingSection | AiTask::DraftingPlan => 120,
             AiTask::DraftingAll => 180,
             AiTask::CallCanonical => 300,
@@ -144,7 +153,7 @@ impl AiTask {
         match self {
             // an agent sets it per call (`pipeline::Custom`)
             AiTask::Embed => 0,
-            AiTask::ConversationTurn | AiTask::CallBrief | AiTask::Agent { .. } => 500,
+            AiTask::ConversationTurn | AiTask::CallBrief | AiTask::Agent { .. } | AiTask::Operator { .. } => 500,
             AiTask::DiagnosisSummary => 2000,
             AiTask::PrioritizationProposeNeeds => 1000,
             AiTask::DraftingSection => 1500,

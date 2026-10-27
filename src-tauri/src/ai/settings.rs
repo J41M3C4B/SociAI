@@ -114,6 +114,9 @@ pub struct AiSettings {
     pub usd_to_mxn: f64,
     pub prices: BTreeMap<String, ModelPrice>,
     pub rate_limits: BTreeMap<String, RateLimit>,
+    /// How the chat answers a question (E1 of IA-4): in words written by `ia.responder`, or with the data of the
+    /// capability. Both stay until the leader chooses one with the real run.
+    pub chat_answer_in_words: bool,
 }
 
 fn default_prices() -> BTreeMap<String, ModelPrice> {
@@ -183,6 +186,7 @@ impl Default for AiSettings {
             usd_to_mxn: 18.5,
             prices: default_prices(),
             rate_limits: default_rate_limits(),
+            chat_answer_in_words: true,
         }
     }
 }

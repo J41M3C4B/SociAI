@@ -871,7 +871,16 @@ export interface OutcomeAsked {
   /** Why the last answer did not pass, as the kernel's code; null the first time. */
   reason: string | null;
 }
-export type OutcomeAsk = { kind: "missing"; fields: OutcomeAsked[] } | { kind: "correct"; field: string; reason: string };
+/** One of the things the person may have meant in the chat: a capability they may use, in its own words. */
+export interface OutcomeChoice {
+  capability: string;
+  description: string;
+}
+/** `choose`: the chat could mean more than one thing; the answer is `{ choice: "<capability>" }`. */
+export type OutcomeAsk =
+  | { kind: "missing"; fields: OutcomeAsked[] }
+  | { kind: "correct"; field: string; reason: string }
+  | { kind: "choose"; options: OutcomeChoice[] };
 /** Why a proposal is asked for once more. */
 export type OutcomeAgain = "changed" | "outdated" | "data_changed";
 /** The way to go on after an error: an error never blocks. */
@@ -887,8 +896,12 @@ export type OutcomeBody =
   | { kind: "data"; capability: string; value: unknown; withheld?: string[] }
   | { kind: "clarification"; capability: string; ask: OutcomeAsk }
   | { kind: "proposal"; capability: string; proposal: unknown; fingerprint: string; again: OutcomeAgain | null }
+  /** `reason` in the chat: `thinking` and `answering` while a model works (the outcome comes as `task-update`), `busy`
+   * when a turn of the task is still under way. */
   | { kind: "state"; reason: string }
-  | { kind: "error"; code: string; next: OutcomeNext };
+  /** `capability`: the one that does it, when the way to go on is another one (`change_from_screen`). Codes of the
+   * chat: `not_offered`, `out_of_scope`, `change_from_screen`, `not_for_this_provider` and the `model_…` ones. */
+  | { kind: "error"; code: string; next: OutcomeNext; capability?: string };
 export interface Outcome {
   task: string;
   /** The step it comes from; 0 when no capability ran. */

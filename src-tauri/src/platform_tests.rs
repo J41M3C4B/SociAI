@@ -78,6 +78,7 @@ fn every_capability_asks_for_a_permission_that_exists() {
     assert_eq!(platform::unknown_permissions(&registry, &modules), vec![]);
     assert_eq!(platform::changes_without_proposal(&registry), vec![]);
     assert_eq!(platform::outputs_outside_dictionary(&registry, &modules), vec![]);
+    assert_eq!(platform::capabilities_named_as_operators(&registry), vec![]);
 }
 
 #[test]
@@ -86,7 +87,7 @@ fn a_capability_of_a_module_runs_from_end_to_end() {
     let mut conn = opened(&modules);
     let registry = Registry::discover().unwrap();
     let ana = Ana(Cell::new("manager"));
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, provider: None };
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, models: None, answer: platform::Answer::Words };
 
     // a note the person saved on the screen, through the kernel (ERP-9)
     let id = kernel::new_id("nota");
@@ -122,7 +123,7 @@ fn a_change_of_a_module_goes_through_the_kernel() {
     let mut conn = opened(&modules);
     let registry = Registry::discover().unwrap();
     let ana = Ana(Cell::new("manager"));
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, provider: None };
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, models: None, answer: platform::Answer::Words };
     let id = kernel::new_id("nota");
     let save = || Content::Invoke {
         capability: "muestra.guardar_nota".into(),
@@ -165,7 +166,7 @@ fn a_module_asks_and_gives_fields_of_the_dictionary() {
     let mut conn = opened(&modules);
     let registry = Registry::discover().unwrap();
     let ana = Ana(Cell::new("admin"));
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, provider: None };
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, models: None, answer: platform::Answer::Words };
 
     // the class of each datum of an output is the catalog's: the capability does not write it
     let classes = |id: &str| {
@@ -205,7 +206,7 @@ fn the_profile_of_the_institution_runs_on_the_platform() {
     let mut conn = opened(&modules);
     let registry = Registry::discover().unwrap();
     let ana = Ana(Cell::new("manager"));
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, provider: None };
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, models: None, answer: platform::Answer::Words };
     let invoke = |capability: &str, input: serde_json::Value| Content::Invoke { capability: capability.into(), input };
 
     // nothing yet: the name comes first, in its window

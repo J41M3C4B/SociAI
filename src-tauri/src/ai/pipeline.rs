@@ -208,6 +208,12 @@ pub struct Custom {
 pub struct Measured {
     pub value: Value,
     pub tokens: u64,
+    /// The model that gave the valid answer: it may be a backup of the one asked.
+    pub model: String,
+    /// The text that went in and came out, and what it cost, in every attempt that got an answer.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_mxn: f64,
 }
 
 pub async fn run(
@@ -303,6 +309,7 @@ pub async fn run_marked(
         None => (prompts::schema(call.task), call.task.max_output_tokens(), prompts::system_prompt(call.task)),
     };
     let mut tokens = 0u64;
+    let (mut input_tokens, mut output_tokens, mut cost_mxn) = (0u64, 0u64, 0.0f64);
     let mut attempt_user = user.clone();
     for attempt in 0..2 {
         let req = AiRequest {
@@ -320,11 +327,15 @@ pub async fn run_marked(
                 let model = if resp.model.is_empty() { provider.model_name(req.tier) } else { resp.model.clone() };
                 let check = validate(&schema, &resp.value);
                 tokens += resp.usage.input_tokens + resp.usage.cache_read_tokens + resp.usage.output_tokens;
+                let cost = settings.cost_mxn(&model, &resp.usage);
+                input_tokens += resp.usage.input_tokens + resp.usage.cache_read_tokens;
+                output_tokens += resp.usage.output_tokens;
+                cost_mxn += cost;
                 ledger.record_usage(&UsageRecord {
                     task: call.task,
                     provider: provider.name().to_string(),
-                    cost_mxn: settings.cost_mxn(&model, &resp.usage),
-                    model,
+                    cost_mxn: cost,
+                    model: model.clone(),
                     input_tokens: resp.usage.input_tokens,
                     output_tokens: resp.usage.output_tokens,
                     cached_tokens: resp.usage.cache_read_tokens,
@@ -335,7 +346,7 @@ pub async fn run_marked(
                     error_kind: check.as_ref().err().map(|_| "schema".to_string()),
                 })?;
                 match check {
-                    Ok(()) => return Ok(Measured { value: resp.value, tokens }),
+                    Ok(()) => return Ok(Measured { value: resp.value, tokens, model, input_tokens, output_tokens, cost_mxn }),
                     Err(msg) => msg,
                 }
             }
