@@ -10,8 +10,12 @@
 //! here knows the screens or Tauri: the app gives the runtime who the account is now, the clock and where to deliver.
 //! Neither the kernel nor a module can use this crate: it does not compile.
 
+mod context;
 pub mod dictionary;
 mod executor;
+pub mod figures;
+pub mod models;
+pub mod operators;
 pub mod outcome;
 pub mod policy;
 pub mod request;
@@ -24,6 +28,8 @@ use capability::{ContractError, Effect, Fault, Registry, Run};
 use kernel::Modules;
 
 pub use dictionary::{output_fields, outputs_outside_dictionary, OutputField};
+pub use models::{Failure, Models, Reply};
+pub use operators::Operator;
 pub use outcome::Outcome;
 pub use request::Request;
 pub use store::migrate;
@@ -66,6 +72,19 @@ pub enum RuntimeError {
     Db(#[from] rusqlite::Error),
     #[error("audit error: {0}")]
     Audit(#[from] kernel::AuditError),
+    #[error("the database lock was poisoned")]
+    Lock,
+}
+
+/// How the chat answers a question once its capability ran (E1 of IA-4): the leader chooses one with the real run,
+/// and the other goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Answer {
+    /// The operator `ia.responder` writes it, and the platform puts the evidence.
+    #[default]
+    Words,
+    /// The data of the capability, with no other call to a model.
+    Data,
 }
 
 pub struct Runtime<'a> {
@@ -74,8 +93,10 @@ pub struct Runtime<'a> {
     pub accounts: &'a dyn Accounts,
     pub clock: &'a dyn Clock,
     pub deliver: &'a dyn Deliver,
-    /// The provider of models the institution uses, with its conditions (ADR-004 §2); none while there is none.
-    pub provider: Option<&'a policy::Provider>,
+    /// The models the institution uses, with the conditions of their provider (ADR-004 §2); none while there are
+    /// none. The policy decides with the provider of the same models that are called.
+    pub models: Option<&'a dyn Models>,
+    pub answer: Answer,
 }
 
 impl Runtime<'_> {
@@ -95,6 +116,16 @@ pub fn unknown_permissions(registry: &Registry, modules: &Modules) -> Vec<Contra
         .all()
         .filter(|c| modules.permission(c.permission).is_none())
         .map(|c| ContractError { id: c.id, fault: Fault::UnknownPermission })
+        .collect()
+}
+
+/// The capabilities that take the name of the platform's operators (`ia.…`, A6): only the platform declares one, so
+/// with one the app does not start.
+pub fn capabilities_named_as_operators(registry: &Registry) -> Vec<ContractError> {
+    registry
+        .all()
+        .filter(|c| c.module() == operators::MODULE)
+        .map(|c| ContractError { id: c.id, fault: Fault::OperatorName })
         .collect()
 }
 

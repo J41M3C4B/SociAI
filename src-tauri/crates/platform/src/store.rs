@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::outcome::Outcome;
 use super::request::Channel;
-use super::task::{Pause, Phase, Task, TaskState, Waiting};
+use super::task::{Held, Pause, Phase, Task, TaskState, Waiting};
 
 /// The owner of the tables of the platform, for the kernel.
 pub const OWNER: &str = "ai";
@@ -97,6 +97,36 @@ ALTER TABLE ai_approval ADD COLUMN input_hash TEXT;
 UPDATE ai_approval SET input_hash = fingerprint;
 ",
     },
+    // the chat (IA-4): what the person wrote in each turn, the task a turn goes on from, what waits to be put in
+    // words, and every call to a model as a step of its task, with what it cost
+    kernel::Migration {
+        version: 4,
+        sql: "
+ALTER TABLE ai_task ADD COLUMN follows TEXT;
+ALTER TABLE ai_task ADD COLUMN held_json TEXT;
+CREATE TABLE ai_turn (
+    task_id TEXT NOT NULL REFERENCES ai_task(id),
+    n INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    at_ms INTEGER NOT NULL,
+    PRIMARY KEY (task_id, n)
+);
+CREATE TABLE ai_model_call (
+    task_id TEXT NOT NULL REFERENCES ai_task(id),
+    n INTEGER NOT NULL,
+    operator TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_mxn REAL NOT NULL DEFAULT 0,
+    result TEXT NOT NULL,
+    started_ms INTEGER NOT NULL,
+    ended_ms INTEGER,
+    PRIMARY KEY (task_id, n)
+);
+",
+    },
 ];
 
 /// Applies the migrations of the platform that the database does not have yet.
@@ -121,19 +151,29 @@ fn pause_str(p: Pause) -> &'static str {
 
 pub fn insert_task(conn: &Connection, t: &Task) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO ai_task (id, organization, account, channel, channel_detail, state, opened_ms, turn_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![t.id, t.organization, t.account, t.channel.as_str(), t.channel.detail(), t.state.as_str(), t.opened_ms, t.turn_ms],
+        "INSERT INTO ai_task (id, organization, account, channel, channel_detail, state, opened_ms, turn_ms, follows)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![t.id, t.organization, t.account, t.channel.as_str(), t.channel.detail(), t.state.as_str(), t.opened_ms, t.turn_ms, t.follows],
     )?;
     Ok(())
 }
 
 /// Writes the task as it is now, with the last outcome it handed over.
 pub fn save_task(conn: &Connection, t: &Task, last: &Outcome) -> rusqlite::Result<()> {
+    save_progress(conn, t)?;
+    conn.execute("UPDATE ai_task SET last_json = ?2 WHERE id = ?1", params![t.id, to_json(last)?])?;
+    Ok(())
+}
+
+/// Writes the task as it is now, keeping the last outcome it handed over: before a model is called, so its steps and
+/// its reserve are written while the database is let go.
+pub fn save_progress(conn: &Connection, t: &Task) -> rusqlite::Result<()> {
     let waiting = t.waiting.as_ref().map(to_json).transpose()?;
+    let held = t.held.as_ref().map(to_json).transpose()?;
     conn.execute(
         "UPDATE ai_task SET state = ?2, pause = ?3, reason = ?4, steps = ?5, corrections = ?6, spent_mxn = ?7,
-                reserved_mxn = ?8, turn_ms = ?9, pause_until_ms = ?10, closed_ms = ?11, waiting_json = ?12, last_json = ?13
+                reserved_mxn = ?8, turn_ms = ?9, pause_until_ms = ?10, closed_ms = ?11, waiting_json = ?12, follows = ?13,
+                held_json = ?14
          WHERE id = ?1",
         params![
             t.id,
@@ -148,7 +188,8 @@ pub fn save_task(conn: &Connection, t: &Task, last: &Outcome) -> rusqlite::Resul
             t.pause_until_ms,
             t.closed_ms,
             waiting,
-            to_json(last)?,
+            t.follows,
+            held,
         ],
     )?;
     Ok(())
@@ -157,7 +198,7 @@ pub fn save_task(conn: &Connection, t: &Task, last: &Outcome) -> rusqlite::Resul
 pub fn load_task(conn: &Connection, id: &str) -> rusqlite::Result<Option<Task>> {
     conn.query_row(
         "SELECT id, organization, account, channel, channel_detail, state, pause, reason, steps, corrections, spent_mxn,
-                reserved_mxn, opened_ms, turn_ms, pause_until_ms, closed_ms, waiting_json
+                reserved_mxn, opened_ms, turn_ms, pause_until_ms, closed_ms, waiting_json, follows, held_json
          FROM ai_task WHERE id = ?1",
         [id],
         |r| {
@@ -166,6 +207,7 @@ pub fn load_task(conn: &Connection, id: &str) -> rusqlite::Result<Option<Task>> 
             let state: String = r.get(5)?;
             let pause: Option<String> = r.get(6)?;
             let waiting: Option<String> = r.get(16)?;
+            let held: Option<String> = r.get(18)?;
             Ok(Task {
                 id: r.get(0)?,
                 organization: r.get(1)?,
@@ -188,6 +230,8 @@ pub fn load_task(conn: &Connection, id: &str) -> rusqlite::Result<Option<Task>> 
                 pause_until_ms: r.get(14)?,
                 closed_ms: r.get(15)?,
                 waiting: waiting.as_deref().map(from_json::<Waiting>).transpose()?,
+                follows: r.get(17)?,
+                held: held.as_deref().map(from_json::<Held>).transpose()?,
             })
         },
     )
@@ -245,6 +289,50 @@ pub fn unfinished_apply(conn: &Connection, task: &str) -> rusqlite::Result<Optio
         |r| Ok(Unfinished { n: r.get(0)?, capability: r.get(1)?, fingerprint: r.get(2)? }),
     )
     .optional()
+}
+
+// ------------------------------------------------------------------ the chat
+
+/// What the person wrote in one turn of the chat, kept with its task like any datum.
+pub fn add_turn(conn: &Connection, task: &str, text: &str, now: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO ai_turn (task_id, n, text, at_ms)
+         VALUES (?1, (SELECT COALESCE(MAX(n), 0) + 1 FROM ai_turn WHERE task_id = ?1), ?2, ?3)",
+        params![task, text, now],
+    )?;
+    Ok(())
+}
+
+/// The last thing the person wrote in a task.
+pub fn last_turn(conn: &Connection, task: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT text FROM ai_turn WHERE task_id = ?1 ORDER BY n DESC LIMIT 1", [task], |r| r.get(0)).optional()
+}
+
+/// A call to a model about to be made: a step of its task.
+pub fn start_model_call(conn: &Connection, task: &str, n: u32, operator: &str, provider: &str, now: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO ai_model_call (task_id, n, operator, provider, result, started_ms) VALUES (?1, ?2, ?3, ?4, 'started', ?5)",
+        params![task, n, operator, provider, now],
+    )?;
+    Ok(())
+}
+
+/// How a call to a model ended: the model that answered, the text it took and gave, and what it cost.
+pub struct ModelCallEnd<'a> {
+    pub model: Option<&'a str>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_mxn: f64,
+    pub result: &'a str,
+}
+
+pub fn end_model_call(conn: &Connection, task: &str, n: u32, end: &ModelCallEnd, now: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE ai_model_call SET model = ?3, input_tokens = ?4, output_tokens = ?5, cost_mxn = ?6, result = ?7, ended_ms = ?8
+         WHERE task_id = ?1 AND n = ?2",
+        params![task, n, end.model, end.input_tokens as i64, end.output_tokens as i64, end.cost_mxn, end.result, now],
+    )?;
+    Ok(())
 }
 
 // ------------------------------------------------------------------ approvals

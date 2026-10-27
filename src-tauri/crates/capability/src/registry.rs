@@ -39,6 +39,9 @@ pub enum Fault {
     UnknownField,
     /// Its output names a field whose class is not in its `data`, which is the most it may touch (ADR-003 A5).
     ClassOutsideData,
+    /// Its id is in the name of the platform's operators (`ia.…`): only the platform declares those (ADR-003 A6). The
+    /// platform checks it when the program starts.
+    OperatorName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -187,8 +187,13 @@ pub enum Datum {
     Field { id: String, class: Class, value: Value },
     /// What the person wrote: it brings no class, the detector looks at it.
     Text(String),
+    /// What the person wrote in the turn before, only as context of the one now (E4): it meets the policy like any
+    /// text, and a model is told it is earlier.
+    Earlier(String),
     /// How many of something there are, and of what class they are.
     Count { what: String, class: Class, n: u64 },
+    /// Words of the program itself, never of the institution: what a capability does, its input. They are public.
+    Program { what: &'static str, value: Value },
 }
 
 /// A part of what a model receives, as the policy let it go.
@@ -197,7 +202,9 @@ pub enum Datum {
 pub enum Part {
     Field { id: String, value: Value },
     Text { text: String },
+    Earlier { text: String },
     Count { what: String, n: u64 },
+    Program { what: String, value: Value },
 }
 
 /// What a model receives (P6 and P7): only the policy builds it, so no model is called with anything else.
@@ -245,6 +252,12 @@ impl ToModel {
     pub fn restore(&self, text: &str) -> String {
         self.vault.reveal(text)
     }
+
+    /// What the model reads, as one text: its parts in order, as JSON. The provider gets this and the legend of the
+    /// marks, nothing else.
+    pub fn render(&self) -> String {
+        serde_json::to_string_pretty(&self.parts).unwrap_or_default()
+    }
 }
 
 /// What a model of this provider receives of these data, for this purpose: each datum goes, goes covered, or stays.
@@ -267,25 +280,45 @@ pub fn to_model(provider: &Provider, purpose: Purpose, data: Vec<Datum>) -> ToMo
                 }
                 Verdict::OnlyCounted | Verdict::Never => left_out.push(id),
             },
-            Datum::Text(text) => {
-                let found = detector().scan(&text);
-                let verdicts: Vec<Verdict> = found.findings.iter().map(|f| decide(class_of(f.kind), to, purpose)).collect();
-                // something in it may not go even covered: the whole text stays, because the detector also misses
-                if verdicts.iter().any(|v| *v < Verdict::Covered) {
-                    left_out.push("text".into());
-                } else if verdicts.contains(&Verdict::Covered) {
-                    parts.push(Part::Text { text: vault.mark(&text, &found) });
-                } else {
-                    parts.push(Part::Text { text });
-                }
-            }
+            Datum::Text(text) => match written(&text, &vault, to, purpose) {
+                Some(text) => parts.push(Part::Text { text }),
+                None => left_out.push("text".into()),
+            },
+            Datum::Earlier(text) => match written(&text, &vault, to, purpose) {
+                Some(text) => parts.push(Part::Earlier { text }),
+                None => left_out.push("earlier".into()),
+            },
             Datum::Count { what, class, n } => match decide_count(class, n, to, purpose) {
                 Verdict::Goes => parts.push(Part::Count { what, n }),
                 _ => left_out.push(format!("count:{what}")),
             },
+            Datum::Program { what, value } => match decide(Class::Public, to, purpose) {
+                Verdict::Goes => parts.push(Part::Program { what: what.into(), value }),
+                _ => left_out.push(format!("program:{what}")),
+            },
         }
     }
     ToModel { provider: provider.id.clone(), purpose, parts, left_out, vault }
+}
+
+/// A text the person wrote, as it may go: as it is, with marks, or not at all. Something in it that may not go even
+/// covered keeps the whole text back, because the detector also misses.
+fn written(text: &str, vault: &Vault, to: Destination, purpose: Purpose) -> Option<String> {
+    let found = detector().scan(text);
+    let verdicts: Vec<Verdict> = found.findings.iter().map(|f| decide(class_of(f.kind), to, purpose)).collect();
+    if verdicts.iter().any(|v| *v < Verdict::Covered) {
+        None
+    } else if verdicts.contains(&Verdict::Covered) {
+        Some(vault.mark(text, &found))
+    } else {
+        Some(text.to_string())
+    }
+}
+
+/// Of the classes a capability touches (its `data`), the one that goes least far to this destination, for this
+/// purpose: the class of a datum of it that names no field (ADR-004 §5.3).
+pub fn strictest(data: &[DataClass], to: Destination, purpose: Purpose) -> Option<Class> {
+    data.iter().filter_map(|c| Class::from_id(c.id())).min_by_key(|c| decide(*c, to, purpose))
 }
 
 /// What an outcome hands over of the output of a capability, field by field (ADR-004 §6, the output): what may not
@@ -423,7 +456,9 @@ mod tests {
             .map(|p| match p {
                 Part::Field { id, .. } => id.clone(),
                 Part::Text { .. } => "text".into(),
+                Part::Earlier { .. } => "earlier".into(),
                 Part::Count { what, .. } => format!("count:{what}"),
+                Part::Program { what, .. } => format!("program:{what}"),
             })
             .collect()
     }

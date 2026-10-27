@@ -40,7 +40,14 @@ pub enum Body {
     /// How the task is, with the code of why.
     State { reason: String },
     /// What went wrong, as a fixed code, and always a way to go on.
-    Error { code: String, next: Next },
+    Error {
+        code: String,
+        next: Next,
+        /// The capability that does it, when the way to go on is another one: a change asked in the chat goes to its
+        /// screen (`change_from_screen`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capability: Option<String>,
+    },
 }
 
 /// What a paused task asks of the person.
@@ -52,6 +59,16 @@ pub enum Ask {
     Missing { fields: Vec<Asked> },
     /// A value of the input to correct: which field and why.
     Correct { field: String, reason: String },
+    /// What the person wrote in the chat could be more than one thing: they choose one of these. The answer gives
+    /// the capability as `{ "choice": "mi_institucion.que_falta" }`.
+    Choose { options: Vec<Choice> },
+}
+
+/// One of the things the person may have meant: a capability they may use, and what it does in its own words.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Choice {
+    pub capability: String,
+    pub description: String,
 }
 
 /// One field of the dictionary that the person is asked for.

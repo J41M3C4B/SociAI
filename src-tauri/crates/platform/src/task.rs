@@ -83,6 +83,24 @@ pub struct Waiting {
     /// The full ids of the fields of the dictionary the person was asked for; none when nothing was.
     #[serde(default)]
     pub asked: Vec<String>,
+    /// The capabilities the person was asked to choose among (`Ask::Choose`); none when it was not a choice.
+    #[serde(default)]
+    pub choices: Vec<String>,
+}
+
+/// Why a running task has not answered yet: the rest of its turn goes on apart, with a model (`Runtime::think`).
+pub const THINKING: &str = "thinking";
+/// The capability ran, and its output waits for a model to put it in words.
+pub const ANSWERING: &str = "answering";
+
+/// What a capability gave in the chat, kept while a model puts it in words: already what the person may see
+/// (ADR-004 §6), in the encrypted database like any datum.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Held {
+    pub capability: String,
+    pub step: u32,
+    pub value: Value,
+    pub withheld: Vec<String>,
 }
 
 /// The limits of a kind of task. The defaults live here, in one place; they are not in the code of any agent.
@@ -101,6 +119,10 @@ pub struct Limits {
 }
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// What a call to a model reserves of the spending of its task before it is made; what it really cost is counted
+/// after. More than any one call of a light model costs, so the limit of the task is never passed.
+pub const RESERVE_PER_CALL_MXN: f64 = 0.5;
 
 impl Limits {
     pub fn of(channel: &Channel) -> Limits {
@@ -161,6 +183,10 @@ pub struct Task {
     pub pause_until_ms: Option<i64>,
     pub closed_ms: Option<i64>,
     pub waiting: Option<Waiting>,
+    /// The task of the chat this one goes on from: its last turn is the earlier one (E4). The router drops it when the
+    /// new text does not go on from it.
+    pub follows: Option<String>,
+    pub held: Option<Held>,
 }
 
 impl Task {
@@ -182,6 +208,8 @@ impl Task {
             pause_until_ms: None,
             closed_ms: None,
             waiting: None,
+            follows: None,
+            held: None,
         }
     }
 
@@ -207,7 +235,6 @@ impl Task {
     }
 
     /// Reserves what a call to a model may cost, before it is made.
-    #[cfg_attr(not(test), allow(dead_code))] // the call to a model goes through the executor with IA-4
     pub fn reserve(&mut self, mxn: f64) -> Result<(), Reached> {
         if self.spent_mxn + self.reserved_mxn + mxn > self.limits().spend_mxn {
             return Err(Reached::Spend);
@@ -217,7 +244,6 @@ impl Task {
     }
 
     /// After the call: the reserve is freed and what it really cost is counted.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn settle(&mut self, reserved: f64, spent: f64) {
         self.reserved_mxn = (self.reserved_mxn - reserved).max(0.0);
         self.spent_mxn += spent;

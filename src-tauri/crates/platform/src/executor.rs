@@ -7,23 +7,44 @@
 //!
 //! A modification is prepared and applied on the kernel (ERP-9): its `prepare` gives the kernel's proposal, the person
 //! approves that proposal by its fingerprint, and the `apply` applies only that fingerprint.
+//!
+//! A text of the chat answers «thinking» at once, and the rest of its turn goes on in `think`, apart: the router
+//! chooses among what the person may use, the capability runs like any other, and an operator puts its output in
+//! words. Each call to a model is a step of the task, and the database is let go while the model thinks.
+
+use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::Connection;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use capability::{Approval, Call, Capability, CapabilityError, Effect, Run};
 use kernel::{Proposal, TaskEvent, TaskMoment};
 
+use super::context;
 use super::dictionary;
-use super::outcome::{Again, Ask, Body, Next, Outcome};
-use super::policy::{self, Datum, Destination, Purpose};
+use super::figures;
+use super::models::Reply;
+use super::operators::{self, Operator};
+use super::outcome::{Again, Ask, Body, Choice, Evidence, Next, Outcome, Source};
+use super::policy::{self, Datum, Destination, Purpose, ToModel};
 use super::request::{Channel, Content, Request};
 use super::store;
-use super::task::{Pause, Phase, Reached, Task, TaskState, Waiting};
-use super::{Runtime, RuntimeError, Who};
+use super::task::{Held, Pause, Phase, Reached, Task, TaskState, Waiting, ANSWERING, RESERVE_PER_CALL_MXN, THINKING};
+use super::{Answer, Runtime, RuntimeError, Who};
 
 type Done = Result<Outcome, RuntimeError>;
+
+/// What the router answers (`operators::ROUTE`).
+#[derive(serde::Deserialize)]
+struct Routed {
+    intent: String,
+    capability: Option<String>,
+    #[serde(default)]
+    options: Vec<String>,
+    input: Option<String>,
+    continues: bool,
+}
 
 /// The fingerprint of a capability and its input: how a repeated step and an input that changed are known. The keys
 /// of the input are written in order, so the same input always gives the same fingerprint. The approval of a
@@ -83,7 +104,7 @@ fn fits(schema: &Value, value: &Value) -> Result<(), String> {
 }
 
 fn error(code: &'static str, next: Next) -> Body {
-    Body::Error { code: code.into(), next }
+    Body::Error { code: code.into(), next, capability: None }
 }
 
 impl Runtime<'_> {
@@ -92,17 +113,30 @@ impl Runtime<'_> {
     pub fn submit(&self, conn: &mut Connection, who: &Who, request: Request) -> Done {
         let now = self.clock.now_ms();
         let Request { channel, task, content } = request;
+        let text = matches!(content, Content::Text { .. });
         let mut task = match task {
-            None => self.open(conn, who, channel, now)?,
+            None => self.open(conn, who, channel, None, now)?,
             Some(id) => match store::load_task(conn, &id)? {
+                // a new text after a task of the chat that ended or waits: a new task, that goes on from it (E4)
+                Some(t) if t.account == who.account && t.organization == who.organization && text && t.channel == Channel::Chat && t.state != TaskState::Running => {
+                    self.open(conn, who, Channel::Chat, Some(t.id), now)?
+                }
                 Some(t) if t.account == who.account && t.organization == who.organization => t,
                 // a task of another account is not touched: a new one says no
                 _ => {
-                    let mut t = self.open(conn, who, channel, now)?;
+                    let mut t = self.open(conn, who, channel, None, now)?;
                     return self.close(conn, &mut t, TaskState::Denied, "not_your_task", 0, error("not_your_task", Next::StartAgain));
                 }
             },
         };
+        // a turn under way finishes first: nothing else enters the task meanwhile, unless it ran out of its time (the
+        // app closed while a model thought)
+        if task.state == TaskState::Running && matches!(task.reason.as_deref(), Some(THINKING | ANSWERING)) {
+            if now - task.turn_ms > task.limits().turn_ms {
+                return self.limit(conn, &mut task, Reached::Time);
+            }
+            return Ok(self.notice(&task, Body::State { reason: "busy".into() }));
+        }
         if task.state.is_closed() {
             // a closed task does not move: it says again how it ended
             return match store::last_outcome(conn, &task.id)? {
@@ -126,23 +160,265 @@ impl Runtime<'_> {
         }
     }
 
-    /// What the person wrote, before any model: the first point of the policy (ADR-004 §6). Without a provider, or
-    /// with something in it that may not go to this one, it ends here; what may go is what the router will receive.
+    /// What the person wrote, before any model: the first point of the policy (ADR-004 §6). Without models, or with
+    /// something in it that may not go to their provider, it ends here. Otherwise the turn says «thinking», and goes
+    /// on in `think`.
     fn chat(&self, conn: &Connection, task: &mut Task, text: String) -> Done {
-        let Some(provider) = self.provider else {
+        let Some(models) = self.models else {
             return self.close(conn, task, TaskState::Error, "without_ai", 0, error("without_ai", Next::UseScreen));
         };
-        let to_router = policy::to_model(provider, Purpose::Route, vec![Datum::Text(text)]);
+        let to_router = policy::to_model(models.provider(), Purpose::Route, vec![Datum::Text(text.clone())]);
         if !to_router.left_out().is_empty() {
-            self.trail(conn, task, TaskMoment::Denied, None, None, Some("not_for_this_provider"))?;
-            return self.close(conn, task, TaskState::Denied, "not_for_this_provider", 0, error("not_for_this_provider", Next::UseScreen));
+            return self.not_for_this_provider(conn, task);
         }
-        // the router comes with IA-4, and it receives `to_router`, never the text as it was written
-        self.close(conn, task, TaskState::Error, "without_ai", 0, error("without_ai", Next::UseScreen))
+        store::add_turn(conn, &task.id, &text, self.clock.now_ms())?;
+        self.running(conn, task, THINKING, 0)
     }
 
-    fn open(&self, conn: &Connection, who: &Who, channel: Channel, now: i64) -> Result<Task, RuntimeError> {
-        let task = Task::open(format!("task_{}", ulid::Ulid::generate()), who.organization, who.account, channel, now);
+    /// The rest of a turn of the chat, apart from the request that started it: whatever the task waits for now, with
+    /// a model. The database is taken for each step and let go while a model thinks, so the app goes on meanwhile.
+    /// Nothing, if the task is not of this account or has nothing under way.
+    pub fn think(&self, db: &Mutex<Connection>, who: &Who, id: &str) -> Result<Option<Outcome>, RuntimeError> {
+        let conn = db.lock().map_err(|_| RuntimeError::Lock)?;
+        let mut task = match store::load_task(&conn, id)? {
+            Some(t) if t.account == who.account && t.organization == who.organization && t.state == TaskState::Running => t,
+            _ => return Ok(None),
+        };
+        let Some(models) = self.models else {
+            return self.close(&conn, &mut task, TaskState::Error, "without_ai", 0, error("without_ai", Next::UseScreen)).map(Some);
+        };
+        let done = match task.reason.as_deref() {
+            Some(THINKING) => self.route(db, conn, who, &mut task, models),
+            Some(ANSWERING) => self.words(db, conn, &mut task, models),
+            _ => return Ok(None),
+        };
+        done.map(Some)
+    }
+
+    /// The router (P4) chooses among what the person may use now: by code, before any model, the capabilities of the
+    /// modules that are on and that this account may run (K2). Knowing what they want gives no permission: anything
+    /// outside the list ends the task.
+    fn route<'d>(&self, db: &'d Mutex<Connection>, mut conn: MutexGuard<'d, Connection>, who: &Who, task: &mut Task, models: &dyn super::Models) -> Done {
+        let text = store::last_turn(&conn, &task.id)?.unwrap_or_default();
+        let earlier = match &task.follows {
+            Some(from) => store::last_turn(&conn, from)?,
+            None => None,
+        };
+        let offered = self.offered(&conn, who);
+        let candidates: Vec<Value> = offered
+            .iter()
+            .map(|c| match c.effect.changes() {
+                true => json!({ "id": c.id, "description": c.description, "effect": "change" }),
+                false => json!({ "id": c.id, "description": c.description, "effect": "query", "input": (c.input)() }),
+            })
+            .collect();
+        // what the person writes now goes first; the turn before, only as earlier (E4)
+        let mut data = vec![Datum::Text(text)];
+        data.extend(earlier.map(Datum::Earlier));
+        data.push(Datum::Program { what: "candidates", value: Value::Array(candidates) });
+        let to_router = policy::to_model(models.provider(), Purpose::Route, data);
+        if to_router.left_out().iter().any(|l| l == "text") {
+            return self.not_for_this_provider(&conn, task);
+        }
+        let (guard, reply) = self.call_model(db, conn, task, models, &operators::ROUTE, &to_router)?;
+        conn = guard;
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(closed) => return Ok(closed),
+        };
+        let Ok(routed) = serde_json::from_value::<Routed>(reply.value) else {
+            return self.close(&conn, task, TaskState::Error, "model_bad_output", 0, error("model_bad_output", Next::TryLater));
+        };
+        // the turn before goes no further when the text does not go on from it
+        if !routed.continues {
+            task.follows = None;
+        }
+        let find = |id: &str, changes: bool| offered.iter().copied().find(|c| c.id == id && c.effect.changes() == changes);
+        match routed.intent.as_str() {
+            "invoke" => {
+                let Some(cap) = routed.capability.as_deref().and_then(|id| find(id, false)) else {
+                    return self.not_offered(&conn, task);
+                };
+                let input = routed.input.as_deref().and_then(|i| serde_json::from_str::<Value>(i).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
+                let outcome = self.step(&mut conn, who, task, cap, Phase::Read, input, None, None)?;
+                // with words, the output waits for the operator that writes them
+                if task.reason.as_deref() == Some(ANSWERING) {
+                    return self.words(db, conn, task, models);
+                }
+                Ok(outcome)
+            }
+            "choose" => {
+                let options: Option<Vec<Choice>> = routed
+                    .options
+                    .iter()
+                    .map(|id| find(id, false).map(|c| Choice { capability: c.id.into(), description: c.description.into() }))
+                    .collect();
+                match options {
+                    Some(options) if !options.is_empty() => {
+                        let choices = options.iter().map(|o| o.capability.clone()).collect();
+                        task.waiting = Some(Waiting { capability: operators::ROUTE.id.into(), phase: Phase::Read, input: json!({}), correction: false, asked: vec![], choices });
+                        let body = Body::Clarification { capability: operators::ROUTE.id.into(), ask: Ask::Choose { options } };
+                        self.pause(&conn, task, Pause::Person, "needs_person", 0, body)
+                    }
+                    _ => self.not_offered(&conn, task),
+                }
+            }
+            // a change from the chat waits for IA-9: the person is sent to the screen of the change, if they may make it
+            "change" => match routed.capability.as_deref().and_then(|id| find(id, true)) {
+                Some(cap) => {
+                    let body = Body::Error { code: "change_from_screen".into(), next: Next::UseScreen, capability: Some(cap.id.into()) };
+                    self.close(&conn, task, TaskState::Error, "change_from_screen", 0, body)
+                }
+                None => self.close(&conn, task, TaskState::Error, "out_of_scope", 0, error("out_of_scope", Next::UseScreen)),
+            },
+            "out_of_scope" => self.close(&conn, task, TaskState::Error, "out_of_scope", 0, error("out_of_scope", Next::UseScreen)),
+            _ => self.close(&conn, task, TaskState::Error, "model_bad_output", 0, error("model_bad_output", Next::TryLater)),
+        }
+    }
+
+    /// Path A of E1: the operator `ia.responder` puts in words what the capability gave. It reads it as the policy
+    /// lets it go to its provider (ADR-004 §6, the context); every figure it writes has to be in what it read, and
+    /// the evidence is the platform's, never the model's. When the words do not hold, the person gets the data.
+    fn words<'d>(&self, db: &'d Mutex<Connection>, conn: MutexGuard<'d, Connection>, task: &mut Task, models: &dyn super::Models) -> Done {
+        let Some(held) = task.held.clone() else {
+            return self.close(&conn, task, TaskState::Error, "bad_output", 0, error("bad_output", Next::TryLater));
+        };
+        let Some(cap) = self.registry.get(&held.capability) else {
+            return self.close(&conn, task, TaskState::Error, "unknown_capability", 0, error("unknown_capability", Next::TryLater));
+        };
+        let Ok(fields) = dictionary::output_fields(cap, self.modules) else {
+            return self.close(&conn, task, TaskState::Error, "bad_output", held.step, error("bad_output", Next::TryLater));
+        };
+        let question = store::last_turn(&conn, &task.id)?.unwrap_or_default();
+        let earlier = match &task.follows {
+            Some(from) => store::last_turn(&conn, from)?,
+            None => None,
+        };
+        let provider = models.provider();
+        let mut data = vec![Datum::Text(question)];
+        data.extend(earlier.map(Datum::Earlier));
+        data.extend(context::data_of(cap, &fields, &held.value, Destination::Model(provider.conditions), Purpose::Answer));
+        let to_responder = policy::to_model(provider, Purpose::Answer, data);
+        let (conn, reply) = self.call_model(db, conn, task, models, &operators::RESPOND, &to_responder)?;
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(closed) => return Ok(closed),
+        };
+        let data = |task: &mut Task, conn: &Connection, reason: &'static str| {
+            self.trail(conn, task, TaskMoment::Step, Some(operators::RESPOND.id), Some(reason), None)?;
+            task.held = None;
+            self.close(conn, task, TaskState::Done, "done", held.step, Body::Data { capability: cap.id.into(), value: held.value.clone(), withheld: held.withheld.clone() })
+        };
+        let Some(text) = reply.value.get("text").and_then(Value::as_str).filter(|t| !t.trim().is_empty()) else {
+            return data(task, &conn, "model_bad_output");
+        };
+        // the AI does not invent figures: each one it writes is in what it read
+        if !figures::unsupported_figures(&[text], &[&to_responder.render()]).is_empty() {
+            return data(task, &conn, "invented_figures");
+        }
+        let text = to_responder.restore(text);
+        let evidence = vec![Evidence { source: Source::Calculation, label: cap.description.into(), reference: Some(format!("{}#{}", cap.id, held.step)) }];
+        task.held = None;
+        self.close(&conn, task, TaskState::Done, "done", held.step, Body::Answer { text, evidence })
+    }
+
+    /// One call to a model, as one step of its task (the AI blueprint §5): within the limits of the task, with its
+    /// spending reserved before and settled after, and written down with what it cost. The database is let go while
+    /// the model thinks. A failure closes the task with its code and a way to go on.
+    fn call_model<'d>(
+        &self,
+        db: &'d Mutex<Connection>,
+        conn: MutexGuard<'d, Connection>,
+        task: &mut Task,
+        models: &dyn super::Models,
+        operator: &'static Operator,
+        to_model: &ToModel,
+    ) -> Result<(MutexGuard<'d, Connection>, Result<Reply, Outcome>), RuntimeError> {
+        let now = self.clock.now_ms();
+        if let Err(reached) = task.may_step(now).and_then(|()| task.reserve(RESERVE_PER_CALL_MXN)) {
+            let closed = self.limit(&conn, task, reached)?;
+            return Ok((conn, Err(closed)));
+        }
+        task.steps += 1;
+        let n = task.steps;
+        store::start_model_call(&conn, &task.id, n, operator.id, &models.provider().id, now)?;
+        store::save_progress(&conn, task)?;
+        drop(conn);
+        let result = models.call(operator, to_model);
+        let conn = db.lock().map_err(|_| RuntimeError::Lock)?;
+        let now = self.clock.now_ms();
+        let (end, result) = match result {
+            Ok(reply) if fits(&(operator.schema)(), &reply.value).is_ok() => {
+                let end = store::ModelCallEnd { model: Some(&reply.model), input_tokens: reply.input_tokens, output_tokens: reply.output_tokens, cost_mxn: reply.cost_mxn, result: "ok" };
+                store::end_model_call(&conn, &task.id, n, &end, now)?;
+                task.settle(RESERVE_PER_CALL_MXN, reply.cost_mxn);
+                (Ok(()), Ok(reply))
+            }
+            Ok(reply) => {
+                let end = store::ModelCallEnd { model: Some(&reply.model), input_tokens: reply.input_tokens, output_tokens: reply.output_tokens, cost_mxn: reply.cost_mxn, result: "model_bad_output" };
+                store::end_model_call(&conn, &task.id, n, &end, now)?;
+                task.settle(RESERVE_PER_CALL_MXN, reply.cost_mxn);
+                (Err("model_bad_output"), Err(super::Failure::BadOutput))
+            }
+            Err(failure) => {
+                let end = store::ModelCallEnd { model: None, input_tokens: 0, output_tokens: 0, cost_mxn: 0.0, result: failure.code() };
+                store::end_model_call(&conn, &task.id, n, &end, now)?;
+                task.settle(RESERVE_PER_CALL_MXN, 0.0);
+                (Err(failure.code()), Err(failure))
+            }
+        };
+        self.trail(&conn, task, TaskMoment::Step, Some(operator.id), Some(end.err().unwrap_or("ok")), None)?;
+        match result {
+            Ok(reply) => Ok((conn, Ok(reply))),
+            Err(failure) => {
+                let next = match failure {
+                    super::Failure::Key => Next::AskAdministrator,
+                    super::Failure::Budget => Next::UseScreen,
+                    _ => Next::TryLater,
+                };
+                let closed = self.close(&conn, task, TaskState::Error, failure.code(), n, error(failure.code(), next))?;
+                Ok((conn, Err(closed)))
+            }
+        }
+    }
+
+    /// What the router may choose from: the capabilities of the modules that are on, that this account may run now
+    /// (K2), in the order of their ids and no more than `OFFERED_AT_MOST`.
+    fn offered(&self, conn: &Connection, who: &Who) -> Vec<&'static Capability> {
+        let mut offered: Vec<&'static Capability> = self
+            .registry
+            .all()
+            .filter(|c| self.modules.is_on(c.module()))
+            .filter(|c| self.authorize(conn, who, c).is_ok())
+            .collect();
+        offered.sort_by_key(|c| c.id);
+        offered.truncate(operators::OFFERED_AT_MOST);
+        offered
+    }
+
+    fn not_for_this_provider(&self, conn: &Connection, task: &mut Task) -> Done {
+        self.trail(conn, task, TaskMoment::Denied, None, None, Some("not_for_this_provider"))?;
+        self.close(conn, task, TaskState::Denied, "not_for_this_provider", 0, error("not_for_this_provider", Next::UseScreen))
+    }
+
+    /// The model named something the person was not offered: the task ends, whatever it was.
+    fn not_offered(&self, conn: &Connection, task: &mut Task) -> Done {
+        self.trail(conn, task, TaskMoment::Denied, Some(operators::ROUTE.id), None, Some("not_offered"))?;
+        self.close(conn, task, TaskState::Denied, "not_offered", 0, error("not_offered", Next::UseScreen))
+    }
+
+    /// The turn goes on apart: the task says why it has not answered yet.
+    fn running(&self, conn: &Connection, task: &mut Task, reason: &'static str, n: u32) -> Done {
+        task.state = TaskState::Running;
+        task.pause = None;
+        task.pause_until_ms = None;
+        task.reason = Some(reason.into());
+        self.respond(conn, task, n, Body::State { reason: reason.into() })
+    }
+
+    fn open(&self, conn: &Connection, who: &Who, channel: Channel, follows: Option<String>, now: i64) -> Result<Task, RuntimeError> {
+        let mut task = Task::open(format!("task_{}", ulid::Ulid::generate()), who.organization, who.account, channel, now);
+        task.follows = follows;
         store::insert_task(conn, &task)?;
         self.trail(conn, &task, TaskMoment::Opened, None, Some(task.channel.as_str()), None)?;
         Ok(task)
@@ -200,6 +476,15 @@ impl Runtime<'_> {
         let (Some(Pause::Person), Some(waiting)) = (task.pause, task.waiting.clone()) else {
             return Ok(self.notice(task, error("not_waiting", Next::StartAgain)));
         };
+        if !waiting.choices.is_empty() {
+            // one of the options the person was offered, and nothing else; the step asks the kernel again
+            let chosen = values.get("choice").and_then(Value::as_str).filter(|c| waiting.choices.iter().any(|w| w == c));
+            let Some(cap) = chosen.and_then(|c| self.registry.get(c)) else {
+                return Ok(self.notice(task, error("not_offered", Next::StartAgain)));
+            };
+            task.waiting = None;
+            return self.step(conn, who, task, cap, Phase::Read, json!({}), None, None);
+        }
         let Some(cap) = self.registry.get(&waiting.capability) else {
             return self.close(conn, task, TaskState::Error, "unknown_capability", 0, error("unknown_capability", Next::TryLater));
         };
@@ -375,7 +660,7 @@ impl Runtime<'_> {
                 let now = self.clock.now_ms();
                 // the pause that follows says it in the trail: paused, waiting for the approval
                 store::ask_approval(conn, &task.id, &to_approve, &hash, cap.id, &input, &value, now)?;
-                task.waiting = Some(Waiting { capability: cap.id.into(), phase: Phase::Apply, input, correction: false, asked: vec![] });
+                task.waiting = Some(Waiting { capability: cap.id.into(), phase: Phase::Apply, input, correction: false, asked: vec![], choices: vec![] });
                 let body = Body::Proposal { capability: cap.id.into(), proposal: value, fingerprint: to_approve, again };
                 self.pause(conn, task, Pause::Approval, "approval", n, body)
             }
@@ -396,6 +681,12 @@ impl Runtime<'_> {
                     return self.close(conn, task, TaskState::Error, "bad_output", n, error("bad_output", Next::TryLater));
                 };
                 let (value, withheld) = policy::hand_over(cap.data, &fields, value, to);
+                // a question of the chat, answered in words (E1, path A): what the person may see waits for the
+                // operator that writes them, in `think`
+                if task.channel == Channel::Chat && phase == Phase::Read && self.models.is_some() && self.answer == Answer::Words {
+                    task.held = Some(Held { capability: cap.id.into(), step: n, value, withheld });
+                    return self.running(conn, task, ANSWERING, n);
+                }
                 self.close(conn, task, TaskState::Done, "done", n, Body::Data { capability: cap.id.into(), value, withheld })
             }
         }
@@ -441,9 +732,9 @@ impl Runtime<'_> {
         let phase = if phase == Phase::Apply { Phase::Prepare } else { phase };
         let asked = match &ask {
             Ask::Missing { fields } => fields.iter().map(|f| f.id.clone()).collect(),
-            Ask::Correct { .. } => vec![],
+            Ask::Correct { .. } | Ask::Choose { .. } => vec![],
         };
-        task.waiting = Some(Waiting { capability: cap.id.into(), phase, input, correction, asked });
+        task.waiting = Some(Waiting { capability: cap.id.into(), phase, input, correction, asked, choices: vec![] });
         self.pause(conn, task, Pause::Person, "needs_person", n, Body::Clarification { capability: cap.id.into(), ask })
     }
 
@@ -477,6 +768,7 @@ impl Runtime<'_> {
         task.pause_until_ms = None;
         task.closed_ms = Some(now);
         task.waiting = None;
+        task.held = None;
         self.trail(conn, task, TaskMoment::Closed, None, Some(state.as_str()), Some(reason))?;
         self.respond(conn, task, n, body)
     }
