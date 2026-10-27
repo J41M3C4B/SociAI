@@ -69,6 +69,67 @@ fn what_no_longer_applies_is_not_kept_whatever_its_window() {
     assert!(PROFILE.missing(&now.values).contains(&"served_last_year"), "and what applies now is asked");
 }
 
+fn fields(values: Value) -> ChangeInput {
+    ChangeInput { values: values.as_object().unwrap().clone() }
+}
+
+fn change(conn: &mut Connection, values: Value) -> Result<Applied, ApplyError> {
+    apply_change(conn, &fields(values), None, &person())
+}
+
+/// What a person says in the chat changes only what they said (ERP-11, asked by IA-9): the rest of its window and of
+/// the profile stays, and the platform never sends back what is saved.
+#[test]
+fn a_change_touches_only_the_fields_it_names() {
+    let mut conn = db();
+    save(&mut conn, "identity", identity()).unwrap();
+    save(&mut conn, "contact", json!({ "contact_phone": "33 1111 2222", "contact_email": "contacto@ejemplo.org", "municipality": "Zapopan" })).unwrap();
+    let p = prepare_change(&conn, &fields(json!({ "contact_phone": " 55 1234 5678 " }))).unwrap();
+    let changed: Vec<(&str, &Value)> = p.changes.iter().map(|c| (c.field.as_str(), &c.after)).collect();
+    assert_eq!(changed, [("contact_phone", &json!("55 1234 5678"))]);
+    let applied = change(&mut conn, json!({ "contact_phone": "55 1234 5678", "notes": "Dos pisos" })).unwrap();
+    let now = profile(&conn).unwrap();
+    assert_eq!(applied.version, 3);
+    assert_eq!(
+        (&now.values["contact_phone"], &now.values["contact_email"], &now.values["municipality"], &now.values["name"], &now.values["notes"]),
+        (&json!("55 1234 5678"), &json!("contacto@ejemplo.org"), &json!("Zapopan"), &json!("Casa Hogar Esperanza"), &json!("Dos pisos"))
+    );
+    let facts: i64 = conn.query_row("SELECT count(*) FROM kernel_outbox WHERE fact = ?1", [PROFILE_SAVED], |r| r.get(0)).unwrap();
+    assert_eq!(facts, 3, "the same fact as saving a window");
+    assert!(matches!(change(&mut conn, json!({ "contact_phone": "55 1234 5678" })), Err(ApplyError::NothingToChange)));
+}
+
+#[test]
+fn a_null_empties_its_field_and_what_no_longer_applies_shows_in_the_proposal() {
+    let mut conn = db();
+    save(&mut conn, "identity", identity()).unwrap();
+    save(&mut conn, "capacity", json!({ "capacity_total": 40, "served_estimate": 35, "notes": "Dos pisos" })).unwrap();
+    change(&mut conn, json!({ "notes": null })).unwrap();
+    assert!(!profile(&conn).unwrap().values.contains_key("notes"));
+    // it no longer lodges anyone: what only applied to lodging goes empty, and the person sees it before approving
+    let p = prepare_change(&conn, &fields(json!({ "modalities": ["community"] }))).unwrap();
+    let emptied: Vec<&str> = p.changes.iter().filter(|c| c.after.is_null()).map(|c| c.field.as_str()).collect();
+    assert_eq!(emptied, ["capacity_total", "served_estimate"]);
+}
+
+#[test]
+fn a_change_passes_the_same_validation_and_knows_only_the_fields_of_the_profile() {
+    let mut conn = db();
+    let invalid = |conn: &Connection, values: Value| -> Vec<(String, String)> {
+        prepare_change(conn, &fields(values)).unwrap().invalid.into_iter().map(|i| (i.field, i.reason)).collect()
+    };
+    let pair = |f: &str, r: &str| (f.to_string(), r.to_string());
+    assert_eq!(invalid(&conn, json!({ "contact_phone": "55 1234 5678" })), [pair("name", "required")], "a profile still empty needs its name");
+    save(&mut conn, "identity", identity()).unwrap();
+    assert_eq!(invalid(&conn, json!({ "postal_code": "0670", "legal_rfc": "chE850101ab1" })), [pair("postal_code", "postal_code_invalid")]);
+    assert_eq!(invalid(&conn, json!({ "patronato": "Rosa" })), [pair("patronato", "unknown_field")]);
+    assert_eq!(invalid(&conn, json!({ "name": null })), [pair("name", "required")]);
+    // an RFC is kept in capitals, as the SAT writes it
+    change(&mut conn, json!({ "legal_rfc": "che850101ab1" })).unwrap();
+    assert_eq!(profile(&conn).unwrap().values["legal_rfc"], json!("CHE850101AB1"));
+    assert!(prepare_change(&conn, &fields(json!({}))).unwrap().changes.is_empty(), "no field, nothing to propose");
+}
+
 #[test]
 fn what_does_not_pass_is_not_saved() {
     let mut conn = db();

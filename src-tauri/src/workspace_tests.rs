@@ -185,9 +185,9 @@ fn every_registered_module_conforms() {
         assert_eq!(platform::changes_without_proposal(&own), vec![], "module `{}`", m.id);
         assert_eq!(platform::outputs_outside_dictionary(&own, &modules), vec![], "module `{}`", m.id);
     }
-    // Mi institución publishes what is missing, a window and saving a window
+    // Mi institución publishes what is missing, a window, saving a window and changing only the fields given
     let mine: Vec<&str> = registry.of_module("mi_institucion").map(|c| c.id).collect();
-    for id in ["mi_institucion.que_falta", "mi_institucion.ver_ventana", "mi_institucion.guardar_ventana"] {
+    for id in ["mi_institucion.que_falta", "mi_institucion.ver_ventana", "mi_institucion.guardar_ventana", "mi_institucion.cambiar_datos"] {
         assert!(mine.contains(&id), "{id}: {mine:?}");
     }
 }

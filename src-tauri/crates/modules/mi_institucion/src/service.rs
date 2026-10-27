@@ -1,5 +1,5 @@
-//! The profile of the institution on the kernel: read it, save a window of it (prepared and then applied, ERP-9), and
-//! take over the profile a database of before the modules already had. The kernel validates it with the catalog
+//! The profile of the institution on the kernel: read it, save a window of it or change only some of its fields (each
+//! prepared and then applied, ERP-9), and take over the profile a database of before the modules already had. The kernel validates it with the catalog
 //! (ERP-2), protects what is not public nor internal and keeps its history with the origin of each change; only what
 //! the dictionary cannot say is written here.
 
@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use serde_json::{Map, Value};
 
 use crate::catalog::PROFILE;
-use crate::contract::{WindowInput, LATEST_YEAR};
+use crate::contract::{ChangeInput, WindowInput, LATEST_YEAR};
 use crate::storage;
 use crate::windows;
 
@@ -93,12 +93,7 @@ impl Changeable for SaveWindow<'_> {
             }
             None => invalid.push(Invalid::new("window", "unknown_window")),
         }
-        invalid.extend(own_rules(conn, &after)?);
-        let as_json = serde_json::to_value(input).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        Ok(kernel::propose(
-            &PROFILE,
-            Draft { entity: profile_ref(), version: now.version, before: (now.version > 0).then_some(now.values), after, invalid, input: &as_json },
-        ))
+        propose(conn, now, after, invalid, input)
     }
 
     fn version(&self, conn: &Connection) -> rusqlite::Result<i64> {
@@ -110,6 +105,51 @@ impl Changeable for SaveWindow<'_> {
     }
 }
 
+/// What the kernel needs to change the fields an input names, and only those (ERP-11, asked by IA-9): what a person
+/// says in the chat changes what they said, and the platform never has to send back what is saved.
+struct ChangeFields<'a>(&'a ChangeInput);
+
+impl Changeable for ChangeFields<'_> {
+    fn prepare(&self, conn: &Connection) -> rusqlite::Result<Proposal> {
+        let input = self.0;
+        let now = profile(conn)?;
+        let sent = clean(&input.values);
+        let mut after = now.values.clone();
+        let mut invalid = Vec::new();
+        for f in input.values.keys() {
+            if PROFILE.field(f).is_none() {
+                invalid.push(Invalid::new(f, "unknown_field"));
+                continue;
+            }
+            // a `null`, or a value that is empty once cleaned, empties the field
+            match sent.get(f) {
+                Some(v) => after.insert(f.clone(), v.clone()),
+                None => after.remove(f),
+            };
+        }
+        propose(conn, now, after, invalid, input)
+    }
+
+    fn version(&self, conn: &Connection) -> rusqlite::Result<i64> {
+        Ok(profile(conn)?.version)
+    }
+
+    fn write(&self, conn: &Connection, proposal: &Proposal) -> rusqlite::Result<()> {
+        storage::save(conn, PROFILE_ID, proposal)
+    }
+}
+
+/// The kernel's proposal of the profile as it would be: the dictionary's validation, then the module's own rules.
+/// What no longer applies goes empty, whatever window it is in.
+fn propose(conn: &Connection, now: storage::Stored, after: Map<String, Value>, mut invalid: Vec<Invalid>, input: &impl serde::Serialize) -> rusqlite::Result<Proposal> {
+    invalid.extend(own_rules(conn, &after)?);
+    let as_json = serde_json::to_value(input).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    Ok(kernel::propose(
+        &PROFILE,
+        Draft { entity: profile_ref(), version: now.version, before: (now.version > 0).then_some(now.values), after, invalid, input: &as_json },
+    ))
+}
+
 /// What saving this window would do. Writes nothing.
 pub fn prepare(conn: &Connection, input: &WindowInput) -> rusqlite::Result<Proposal> {
     SaveWindow(input).prepare(conn)
@@ -118,6 +158,16 @@ pub fn prepare(conn: &Connection, input: &WindowInput) -> rusqlite::Result<Propo
 /// Saves the window, if the profile is still as it was when `approved` was prepared (when there was an approval).
 pub fn apply(conn: &mut Connection, input: &WindowInput, approved: Option<&str>, origin: &Origin) -> Result<Applied, ApplyError> {
     kernel::apply(conn, &SaveWindow(input), approved, origin, PROFILE_SAVED)
+}
+
+/// What changing these fields would do. Writes nothing.
+pub fn prepare_change(conn: &Connection, input: &ChangeInput) -> rusqlite::Result<Proposal> {
+    ChangeFields(input).prepare(conn)
+}
+
+/// Changes these fields, and only these, if the profile is still as it was when `approved` was prepared.
+pub fn apply_change(conn: &mut Connection, input: &ChangeInput, approved: Option<&str>, origin: &Origin) -> Result<Applied, ApplyError> {
+    kernel::apply(conn, &ChangeFields(input), approved, origin, PROFILE_SAVED)
 }
 
 /// Where a datum of the profile comes from: the last change that wrote it.
