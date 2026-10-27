@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use super::outcome::{Again, Ask, Asked, Body, Choice, Evidence, Next, Outcome, Source};
+use super::outcome::{Again, Ask, Asked, Body, Choice, Cited, Evidence, Next, Outcome, Shown, Source};
 use super::request::{Channel, Content, Request};
 use super::task::{Limits, Phase, Reached, Task, TaskState};
 use super::*;
@@ -506,7 +506,6 @@ struct World {
     accounts: Accounts,
     window: Window,
     models: Option<Simulated>,
-    answer: Answer,
 }
 
 const ANA_ID: &str = "usr_01JABCDEFGHJKMNPQRSTVWXYZ0";
@@ -541,7 +540,6 @@ impl World {
             accounts: Accounts { role: Cell::new("manager"), active: Cell::new(true), organization: Cell::new("org") },
             window: Window::default(),
             models: None,
-            answer: Answer::Words,
         }
     }
 
@@ -553,7 +551,6 @@ impl World {
             clock: &self.clock,
             deliver: &self.window,
             models: self.models.as_ref().map(|m| m as &dyn Models),
-            answer: self.answer,
         }
     }
 
@@ -1308,14 +1305,15 @@ fn model_calls(w: &World, task: &str) -> Vec<(String, String, f64)> {
         .unwrap()
 }
 
-/// The whole path of a question written in the chat (E1, path A): the policy before any model, the router chooses
-/// among what the person may use, the capability runs like any other, and `ia.responder` puts its output in words.
-/// The evidence is the platform's. Run it with `-- --nocapture` to read it.
+/// The whole path of a question written in the chat: the policy before any model, the router chooses among what the
+/// person may use, the capability runs like any other, and `ia.responder` gives the context, citing each datum
+/// instead of writing it. The answer carries the data, exact (E1); the evidence is the platform's. Run it with
+/// `-- --nocapture` to read it.
 #[test]
 fn a_question_in_the_chat_walks_the_whole_path_in_words() {
     let model = Simulated::new(policy::Conditions::Processor)
         .says("ia.enrutar", routed("trial.read"))
-        .says("ia.responder", json!({ "text": "Su nombre de prueba es Casa Hogar." }));
+        .says("ia.responder", json!({ "text": "Su nombre de prueba es [[name]]." }));
     let w = chatting(model);
     println!("\nLa persona escribe en el chat: «¿Cómo se llama la institución de prueba?»");
     let first = w.submit_on(Channel::Chat, &ANA, None, Content::Text { text: "¿Cómo se llama la institución de prueba?".into() });
@@ -1324,7 +1322,9 @@ fn a_question_in_the_chat_walks_the_whole_path_in_words() {
     let o = w.go_on(first);
     println!("  después: {:?}, {:?}", o.state, o.body);
     let evidence = vec![Evidence { source: Source::Calculation, label: "Lee el nombre de prueba.".into(), reference: Some("trial.read#2".into()) }];
-    assert_eq!(o.body, Body::Answer { text: "Su nombre de prueba es Casa Hogar.".into(), evidence });
+    let cited = vec![Cited { path: "name".into(), value: json!("Casa Hogar"), field: None }];
+    let data = Shown { capability: "trial.read".into(), value: json!({ "name": "Casa Hogar" }), withheld: vec![], cited };
+    assert_eq!(o.body, Body::Answer { text: "Su nombre de prueba es [[name]].".into(), evidence, data: Some(data) });
     assert_eq!((o.state, o.step), (TaskState::Done, 2));
 
     // the router read the text and the list it may choose from; never something the account may not use
@@ -1346,14 +1346,32 @@ fn a_question_in_the_chat_walks_the_whole_path_in_words() {
     assert!(trail.contains(&line("task.step", Some("ia.responder"), Some("ok"), None)), "{trail:?}");
 }
 
-/// Path B of E1: the data of the capability, with no other call to a model.
+/// The data are always exact (E1): words that write a value instead of citing it, or that cite something they did not
+/// read, give way to the data.
 #[test]
-fn a_question_in_the_chat_can_be_answered_with_the_data() {
-    let w = World { answer: Answer::Data, ..chatting(Simulated::new(policy::Conditions::Processor).says("ia.enrutar", routed("trial.read"))) };
-    let o = w.chat(None, "¿Cómo se llama?");
-    assert_eq!(o.body, Body::Data { capability: "trial.read".into(), value: json!({ "name": "Casa Hogar" }), withheld: vec![] });
-    assert_eq!(o.state, TaskState::Done);
-    assert_eq!(w.read().len(), 1, "only the router");
+fn words_that_write_or_invent_a_datum_give_way_to_the_data() {
+    let data = Body::Data { capability: "trial.read".into(), value: json!({ "name": "Casa Hogar" }), withheld: vec![] };
+    for (words, why) in [("Se llama Casa Hogar.", "copied_value"), ("Se llama [[nombre_oficial]].", "unknown_citation")] {
+        let model = Simulated::new(policy::Conditions::Processor).says("ia.enrutar", routed("trial.read")).says("ia.responder", json!({ "text": words }));
+        let w = chatting(model);
+        let o = w.chat(None, "¿Cómo se llama?");
+        assert_eq!((o.state, o.body.clone()), (TaskState::Done, data.clone()), "{words}");
+        assert!(w.trail(&o.task).contains(&line("task.step", Some("ia.responder"), Some(why), None)), "{words}");
+    }
+}
+
+/// A count of data of persons below three keeps their class (ADR-004 §5.2): it does not reach the words, so a figure
+/// the words write about it gives way to the data.
+#[test]
+fn a_count_of_few_persons_does_not_reach_the_words() {
+    let model = Simulated::new(policy::Conditions::Processor)
+        .says("ia.enrutar", routed("trial.calls"))
+        .says("ia.responder", json!({ "text": "Hay 0 llamadas." }));
+    let w = chatting(model);
+    let o = w.chat(None, "¿Cuántas llamadas hay?");
+    assert!(matches!(&o.body, Body::Data { .. }), "{o:?}");
+    assert!(!w.read()[1].1.contains("\"count\""), "{}", w.read()[1].1);
+    assert!(w.trail(&o.task).contains(&line("task.step", Some("ia.responder"), Some("invented_figures"), None)));
 }
 
 /// Knowing the intention gives no permission: whatever the model names outside the list ends the task, a capability
@@ -1378,7 +1396,7 @@ fn the_router_only_chooses_from_what_was_offered() {
 fn an_ambiguous_question_is_asked_with_options() {
     let model = Simulated::new(policy::Conditions::Processor)
         .says("ia.enrutar", json!({ "intent": "choose", "options": ["trial.read", "trial.calls"], "continues": false }))
-        .says("ia.responder", json!({ "text": "Se llama Casa Hogar." }));
+        .says("ia.responder", json!({ "text": "Se llama [[name]]." }));
     let w = chatting(model);
     let asked = w.chat(None, "Lo de siempre");
     let options = vec![
@@ -1394,7 +1412,7 @@ fn an_ambiguous_question_is_asked_with_options() {
     assert_eq!(w.task(&asked.task).state, TaskState::Paused);
 
     let o = w.choose(&asked.task, "trial.read");
-    assert!(matches!(&o.body, Body::Answer { text, .. } if text == "Se llama Casa Hogar."), "{o:?}");
+    assert!(matches!(&o.body, Body::Answer { text, .. } if text == "Se llama [[name]]."), "{o:?}");
     assert_eq!(o.state, TaskState::Done);
 }
 
@@ -1420,7 +1438,7 @@ fn a_change_goes_to_its_screen_and_the_rest_is_out_of_scope() {
 fn the_turn_before_goes_only_where_it_belongs() {
     let model = Simulated::new(policy::Conditions::Processor)
         .says("ia.enrutar", routed("trial.read"))
-        .says("ia.responder", json!({ "text": "Se llama Casa Hogar." }))
+        .says("ia.responder", json!({ "text": "Se llama [[name]]." }))
         .says("ia.enrutar", json!({ "intent": "invoke", "capability": "trial.read", "input": "{}", "continues": true }))
         .says("ia.responder", json!({ "text": "Así se llama hoy." }))
         .says("ia.enrutar", routed("trial.calls"))
@@ -1451,10 +1469,13 @@ fn the_turn_before_goes_only_where_it_belongs() {
 fn the_responder_reads_only_what_the_policy_lets_go() {
     let input = json!({ "phone": "55 1234 5678", "kind": "casa" }).to_string();
     let dial = json!({ "intent": "invoke", "capability": "trial.dial", "input": input, "continues": false });
-    let model = Simulated::new(policy::Conditions::Processor).says("ia.enrutar", dial).says("ia.responder", json!({ "text": "Es un teléfono de casa." }));
+    let model = Simulated::new(policy::Conditions::Processor).says("ia.enrutar", dial).says("ia.responder", json!({ "text": "Es un teléfono [[kind]]." }));
     let w = chatting(model);
     let o = w.chat(None, "¿A quién llamo?");
-    assert!(matches!(&o.body, Body::Answer { text, .. } if text == "Es un teléfono de casa."), "{o:?}");
+    let Body::Answer { text, data: Some(data), .. } = &o.body else { panic!("{o:?}") };
+    assert_eq!(text, "Es un teléfono [[kind]].");
+    // the screen gets the datum the words cite with its field, to name it as it does everywhere
+    assert_eq!(data.cited, vec![Cited { path: "kind".into(), value: json!("casa"), field: Some("trial.contact.kind".into()) }]);
     let read = w.read();
     assert!(read[1].1.contains("casa"), "{}", read[1].1);
     assert!(!read[1].1.contains("1234"), "a datum of a person is not read to answer: {}", read[1].1);
@@ -1465,7 +1486,7 @@ fn the_responder_reads_only_what_the_policy_lets_go() {
 fn words_with_an_invented_figure_give_way_to_the_data() {
     let model = Simulated::new(policy::Conditions::Processor)
         .says("ia.enrutar", routed("trial.read"))
-        .says("ia.responder", json!({ "text": "Se llama Casa Hogar y tiene 25 camas." }));
+        .says("ia.responder", json!({ "text": "Se llama [[name]] y tiene 25 camas." }));
     let w = chatting(model);
     let o = w.chat(None, "¿Cómo se llama?");
     assert_eq!(o.body, Body::Data { capability: "trial.read".into(), value: json!({ "name": "Casa Hogar" }), withheld: vec![] });

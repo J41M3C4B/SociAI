@@ -890,8 +890,23 @@ export interface OutcomeEvidence {
   label: string;
   reference: string | null;
 }
+/** A datum the words of an answer cite as `[[path]]`: the screen puts there `value`, named as its `field` is named. */
+export interface OutcomeCited {
+  path: string;
+  value: unknown;
+  /** The full id of its field (`mi_institucion.profile.mission`); its words live in `es-MX.ts` under it. */
+  field: string | null;
+}
+/** The data of an answer, exact, as the policy lets them go to the person, and the data its words cite. */
+export interface OutcomeShown {
+  capability: string;
+  value: unknown;
+  withheld?: string[];
+  cited: OutcomeCited[];
+}
 export type OutcomeBody =
-  | { kind: "answer"; text: string; evidence: OutcomeEvidence[] }
+  /** The text never writes a datum: it cites it as `[[path]]`, and `data` brings it exact (E1 of IA-4). */
+  | { kind: "answer"; text: string; evidence: OutcomeEvidence[]; data?: OutcomeShown }
   /** `withheld`: the paths the policy took out for where it goes (ADR-004), never their values; absent when none. */
   | { kind: "data"; capability: string; value: unknown; withheld?: string[] }
   | { kind: "clarification"; capability: string; ask: OutcomeAsk }

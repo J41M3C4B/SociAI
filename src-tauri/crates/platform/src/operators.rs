@@ -46,13 +46,14 @@ pub const ROUTE: Operator = Operator {
     max_output_tokens: 400,
 };
 
-/// Puts in words what a capability gave, for the person who asked (path A of E1).
+/// Gives the context and the order of what a capability gave, for the person who asked, citing each datum instead
+/// of writing it: the data go with the words, exact (E1).
 pub const RESPOND: Operator = Operator {
     id: "ia.responder",
     purpose: Purpose::Answer,
     tier: Tier::Light,
-    prompt: include_str!("../prompts/ia.responder.v1.md"),
-    version: 1,
+    prompt: include_str!("../prompts/ia.responder.v2.md"),
+    version: 2,
     schema: respond_schema,
     max_output_tokens: 600,
 };

@@ -10,6 +10,7 @@
 //! here knows the screens or Tauri: the app gives the runtime who the account is now, the clock and where to deliver.
 //! Neither the kernel nor a module can use this crate: it does not compile.
 
+mod cite;
 mod context;
 pub mod dictionary;
 mod executor;
@@ -76,17 +77,6 @@ pub enum RuntimeError {
     Lock,
 }
 
-/// How the chat answers a question once its capability ran (E1 of IA-4): the leader chooses one with the real run,
-/// and the other goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Answer {
-    /// The operator `ia.responder` writes it, and the platform puts the evidence.
-    #[default]
-    Words,
-    /// The data of the capability, with no other call to a model.
-    Data,
-}
-
 pub struct Runtime<'a> {
     pub registry: &'a Registry,
     pub modules: &'a Modules,
@@ -96,7 +86,6 @@ pub struct Runtime<'a> {
     /// The models the institution uses, with the conditions of their provider (ADR-004 §2); none while there are
     /// none. The policy decides with the provider of the same models that are called.
     pub models: Option<&'a dyn Models>,
-    pub answer: Answer,
 }
 
 impl Runtime<'_> {

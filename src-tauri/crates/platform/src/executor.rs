@@ -21,17 +21,18 @@ use sha2::{Digest, Sha256};
 use capability::{Approval, Call, Capability, CapabilityError, Effect, Run};
 use kernel::{Proposal, TaskEvent, TaskMoment};
 
+use super::cite;
 use super::context;
 use super::dictionary;
 use super::figures;
 use super::models::Reply;
 use super::operators::{self, Operator};
-use super::outcome::{Again, Ask, Body, Choice, Evidence, Next, Outcome, Source};
-use super::policy::{self, Datum, Destination, Purpose, ToModel};
+use super::outcome::{Again, Ask, Body, Choice, Cited, Evidence, Next, Outcome, Shown, Source};
+use super::policy::{self, Datum, Destination, Part, Purpose, ToModel};
 use super::request::{Channel, Content, Request};
 use super::store;
 use super::task::{Held, Pause, Phase, Reached, Task, TaskState, Waiting, ANSWERING, RESERVE_PER_CALL_MXN, THINKING};
-use super::{Answer, Runtime, RuntimeError, Who};
+use super::{Runtime, RuntimeError, Who};
 
 type Done = Result<Outcome, RuntimeError>;
 
@@ -276,9 +277,11 @@ impl Runtime<'_> {
         }
     }
 
-    /// Path A of E1: the operator `ia.responder` puts in words what the capability gave. It reads it as the policy
-    /// lets it go to its provider (ADR-004 §6, the context); every figure it writes has to be in what it read, and
-    /// the evidence is the platform's, never the model's. When the words do not hold, the person gets the data.
+    /// The words and the data together (E1): the operator `ia.responder` gives the context and the order of what the
+    /// capability gave, and cites each datum as `[[path]]` instead of writing it. It reads it as the policy lets it go
+    /// to its provider (ADR-004 §6, the context). The words hold only if every citation is of something it read, no
+    /// value is written instead of cited, and every figure is in what it read; the evidence is the platform's, never
+    /// the model's. When the words do not hold, the person gets the data.
     fn words<'d>(&self, db: &'d Mutex<Connection>, conn: MutexGuard<'d, Connection>, task: &mut Task, models: &dyn super::Models) -> Done {
         let Some(held) = task.held.clone() else {
             return self.close(&conn, task, TaskState::Error, "bad_output", 0, error("bad_output", Next::TryLater));
@@ -312,14 +315,44 @@ impl Runtime<'_> {
         let Some(text) = reply.value.get("text").and_then(Value::as_str).filter(|t| !t.trim().is_empty()) else {
             return data(task, &conn, "model_bad_output");
         };
+        // what it read, by the path of each datum
+        let read: Vec<(&str, &Value)> = to_responder
+            .parts()
+            .iter()
+            .filter_map(|p| match p {
+                Part::Field { id, value } => Some((id.as_str(), value)),
+                _ => None,
+            })
+            .collect();
+        let mut cited = Vec::new();
+        for path in cite::paths(text) {
+            // a datum it read, or a whole item of a list whose data it read (`missing[0]`)
+            let read_here = |id: &str| id == path || id.strip_prefix(path.as_str()).is_some_and(|rest| rest.starts_with('.') || rest.starts_with('['));
+            let value = match read.iter().find(|(id, _)| *id == path) {
+                Some(&(_, value)) => Some(value.clone()),
+                None if read.iter().any(|(id, _)| read_here(id)) => context::at(&held.value, &path).cloned(),
+                None => None,
+            };
+            let Some(value) = value else {
+                return data(task, &conn, "unknown_citation");
+            };
+            let pattern = context::pattern_of(&path);
+            let field = fields.iter().find(|f| f.path == pattern).map(|f| f.field.clone());
+            cited.push(Cited { path, value, field });
+        }
+        // the data are always exact: a value is cited, never written by the model
+        if cite::copies(text, read.iter().filter_map(|(_, v)| v.as_str())) {
+            return data(task, &conn, "copied_value");
+        }
         // the AI does not invent figures: each one it writes is in what it read
-        if !figures::unsupported_figures(&[text], &[&to_responder.render()]).is_empty() {
+        if !figures::unsupported_figures(&[&cite::without_citations(text)], &[&to_responder.render()]).is_empty() {
             return data(task, &conn, "invented_figures");
         }
         let text = to_responder.restore(text);
         let evidence = vec![Evidence { source: Source::Calculation, label: cap.description.into(), reference: Some(format!("{}#{}", cap.id, held.step)) }];
+        let shown = Shown { capability: cap.id.into(), value: held.value.clone(), withheld: held.withheld.clone(), cited };
         task.held = None;
-        self.close(&conn, task, TaskState::Done, "done", held.step, Body::Answer { text, evidence })
+        self.close(&conn, task, TaskState::Done, "done", held.step, Body::Answer { text, evidence, data: Some(shown) })
     }
 
     /// One call to a model, as one step of its task (the AI blueprint §5): within the limits of the task, with its
@@ -681,9 +714,9 @@ impl Runtime<'_> {
                     return self.close(conn, task, TaskState::Error, "bad_output", n, error("bad_output", Next::TryLater));
                 };
                 let (value, withheld) = policy::hand_over(cap.data, &fields, value, to);
-                // a question of the chat, answered in words (E1, path A): what the person may see waits for the
-                // operator that writes them, in `think`
-                if task.channel == Channel::Chat && phase == Phase::Read && self.models.is_some() && self.answer == Answer::Words {
+                // a question of the chat is answered in words with its data (E1): what the person may see waits for
+                // the operator that writes them, in `think`
+                if task.channel == Channel::Chat && phase == Phase::Read && self.models.is_some() {
                     task.held = Some(Held { capability: cap.id.into(), step: n, value, withheld });
                     return self.running(conn, task, ANSWERING, n);
                 }

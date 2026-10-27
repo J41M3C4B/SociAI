@@ -23,8 +23,14 @@ pub struct Outcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Body {
-    /// A text for the person and where each datum of it comes from. The operators of IA-4 write it.
-    Answer { text: String, evidence: Vec<Evidence> },
+    /// A text for the person and where each datum of it comes from. The operators of IA-4 write it, and with a
+    /// capability behind it, it carries its data (E1): the words give the context and the order, the data are exact.
+    Answer {
+        text: String,
+        evidence: Vec<Evidence>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<Shown>,
+    },
     /// What a capability gave, for a screen: what the policy let it hand over, and the paths it took out, never their
     /// values (ADR-004).
     Data {
@@ -48,6 +54,29 @@ pub enum Body {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         capability: Option<String>,
     },
+}
+
+/// The data of an answer, as the policy lets them go to the person, and the data its words cite. The text never
+/// writes a datum or the name of a field: it cites it as `[[path]]`, and the screen puts there the datum as it is,
+/// with the name the person sees for its field (E1 of IA-4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shown {
+    pub capability: String,
+    pub value: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withheld: Vec<String>,
+    /// Each `[[path]]` of the text, once, in the order it first appears.
+    pub cited: Vec<Cited>,
+}
+
+/// A datum the words cite: where it is in the data, its value, and its field of the dictionary when it names one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Cited {
+    /// As the text writes it between `[[` and `]]`: `missing[0].field`, `profile.mission`.
+    pub path: String,
+    pub value: Value,
+    /// The full id of its field (`mi_institucion.profile.mission`): its words live in `src/i18n/es-MX.ts` under it.
+    pub field: Option<String>,
 }
 
 /// What a paused task asks of the person.

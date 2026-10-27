@@ -6,7 +6,7 @@
       {
         "text": "¿Qué me falta por llenar?",
         "router": { "intent": "invoke", "capability": "mi_institucion.que_falta", "input": "{}", "continues": false },
-        "responder": "Le faltan varios datos del perfil, sobre todo de contacto y legales.",
+        "responder": "Le faltan varios datos en la sección legal y en otras; los primeros son [[missing[0]]] y [[missing[1].field]].",
         "expect": [{ "outcome": "answer", "capability": "mi_institucion.que_falta" }]
       }
     ]
@@ -18,7 +18,7 @@
       {
         "text": "¿Qué datos le faltan al perfil de la institución?",
         "router": { "intent": "invoke", "capability": "mi_institucion.que_falta", "input": "{}", "continues": false },
-        "responder": "Faltan datos en las ventanas de contacto, legales y de capacidad.",
+        "responder": "Faltan datos en varias ventanas, empezando por [[missing[0].field]].",
         "expect": [{ "outcome": "answer", "capability": "mi_institucion.que_falta" }]
       }
     ]
@@ -42,7 +42,7 @@
       {
         "text": "¿Cómo tenemos registrada la misión de la institución?",
         "router": { "intent": "invoke", "capability": "mi_institucion.ver_ventana", "input": "{\"window\": \"identity\"}", "continues": false },
-        "responder": "La misión registrada es ofrecer un espacio seguro a niñas en riesgo.",
+        "responder": "La misión registrada es [[profile.mission]].",
         "expect": [{ "outcome": "answer", "capability": "mi_institucion.ver_ventana" }]
       }
     ]
@@ -54,7 +54,7 @@
       {
         "text": "¿qué falta?",
         "router": { "intent": "invoke", "capability": "mi_institucion.que_falta", "input": "{}", "continues": false },
-        "responder": "Le faltan datos del perfil.",
+        "responder": "Le faltan datos del perfil, como [[missing[0].field]].",
         "expect": [{ "outcome": "answer", "capability": "mi_institucion.que_falta" }, { "outcome": "choose" }]
       }
     ]
@@ -175,13 +175,13 @@
       {
         "text": "¿Qué me falta por llenar?",
         "router": { "intent": "invoke", "capability": "mi_institucion.que_falta", "input": "{}", "continues": false },
-        "responder": "Le faltan varios datos del perfil.",
+        "responder": "Le faltan datos como [[missing[0].field]].",
         "expect": [{ "outcome": "answer", "capability": "mi_institucion.que_falta" }]
       },
       {
         "text": "¿Y cuál de esos va primero?",
         "router": { "intent": "invoke", "capability": "mi_institucion.que_falta", "input": "{}", "continues": true },
-        "responder": "Primero van los de la ventana de identidad.",
+        "responder": "Los datos no dicen qué va primero; en la lista, el primero es [[missing[0].field]].",
         "continues": true,
         "expect": [{ "outcome": "answer", "capability": "mi_institucion.que_falta" }]
       }
@@ -194,7 +194,7 @@
       {
         "text": "¿Qué me falta por llenar?",
         "router": { "intent": "invoke", "capability": "mi_institucion.que_falta", "input": "{}", "continues": false },
-        "responder": "Le faltan varios datos del perfil.",
+        "responder": "Le faltan datos como [[missing[0].field]].",
         "expect": [{ "outcome": "answer", "capability": "mi_institucion.que_falta" }]
       },
       {

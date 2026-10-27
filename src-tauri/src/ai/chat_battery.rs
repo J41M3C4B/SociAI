@@ -6,8 +6,8 @@
 //!   that the platform does the right thing with it, the controls included (a model that names what was not offered,
 //!   a text that may not go to the provider). No network and no spending.
 //! - With a real model (`chat_battery_live`, ignored by default): the same cases, the answers of the model measured
-//!   against what each case expects, with the tokens and the cost of every call, and the words (path A of E1) next to
-//!   the data (path B). At most 12 calls per minute; the whole output goes to a file.
+//!   against what each case expects, with the tokens and the cost of every call, and each answer with its citations
+//!   and its data (E1). At most 12 calls per minute; the whole output goes to a file.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
@@ -21,7 +21,7 @@ use platform::outcome::{Ask, Body};
 use platform::policy::{Conditions, Provider, ToModel};
 use platform::request::{Channel, Content};
 use platform::task::TaskState;
-use platform::{Accounts, Answer, Clock, Deliver, Outcome, Request, Runtime, Who};
+use platform::{Accounts, Clock, Deliver, Outcome, Request, Runtime, Who};
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -110,7 +110,7 @@ fn opened(registry: &Registry, modules: &Modules) -> (tempfile::TempDir, Mutex<C
     platform::migrate(&mut conn).unwrap();
     let fixture: Value = serde_json::from_str(include_str!("../../../fixtures/institucion-casa-hogar.json")).unwrap();
     let institution = &fixture["institution"];
-    let runtime = Runtime { registry, modules, accounts: &Ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, models: None, answer: Answer::Data };
+    let runtime = Runtime { registry, modules, accounts: &Ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, models: None };
     let screen = Channel::Screen { place: "institution".into() };
     let input = json!({ "window": "identity", "name": institution["name"], "mission": institution["mission"] });
     let asked = runtime
@@ -174,12 +174,14 @@ fn chat_battery() {
                 model.replies.borrow_mut().push_back(("ia.responder", json!({ "text": r })));
             }
         }
-        let runtime = Runtime { registry: &registry, modules: &modules, accounts: &Ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, models: Some(&model), answer: Answer::Words };
+        let runtime = Runtime { registry: &registry, modules: &modules, accounts: &Ana, clock: &Ticks(Cell::new(0)), deliver: &Nowhere, models: Some(&model) };
         let mut task: Option<String> = None;
         for t in &case.turns {
             let o = turn(&runtime, &db, task.as_deref(), &t.text);
             let g = got(&o);
-            let ok = right(&t.expect, &g) && t.continues.is_none_or(|c| follows(&db, &o.task) == c);
+            // words that were given have to hold: the data alone would be a fallback
+            let worded = t.responder.is_none() || matches!(o.body, Body::Answer { .. });
+            let ok = worded && right(&t.expect, &g) && t.continues.is_none_or(|c| follows(&db, &o.task) == c);
             let tally = by_category.entry(case.category.clone()).or_default();
             tally.1 += 1;
             if ok {
@@ -220,6 +222,7 @@ fn chat_battery_live() {
     let mut report = String::new();
     let mut by_category: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     let (mut calls, mut cost, mut tokens, mut questions) = (0u32, 0.0f64, 0u64, 0u32);
+    let (mut worded, mut fallbacks) = (0u32, 0u32);
     for case in cases() {
         let (_dir, db) = opened(&registry, &modules);
         let db = Arc::new(db);
@@ -227,8 +230,8 @@ fn chat_battery_live() {
         s.provider = ProviderKind::Gemini;
         settings::save(&db.lock().unwrap(), &s).unwrap();
         let inner = crate::ai::build_provider(&s, key.clone());
-        let models = Spaced { models: ProviderModels::new(ProviderKind::Gemini, inner, db.clone()), routed_input: RefCell::new(json!({})) };
-        let runtime = Runtime { registry: &registry, modules: &modules, accounts: &Ana, clock: &platform::SystemClock, deliver: &Nowhere, models: Some(&models), answer: Answer::Words };
+        let models = Spaced(ProviderModels::new(ProviderKind::Gemini, inner, db.clone()));
+        let runtime = Runtime { registry: &registry, modules: &modules, accounts: &Ana, clock: &platform::SystemClock, deliver: &Nowhere, models: Some(&models) };
         let mut task: Option<String> = None;
         for t in &case.turns {
             let o = turn(&runtime, &db, task.as_deref(), &t.text);
@@ -256,17 +259,32 @@ fn chat_battery_live() {
             drop(statement);
             drop(conn);
             match &o.body {
-                Body::Answer { text, .. } => {
-                    let _ = writeln!(report, "A (palabras): {text}");
-                    // path B: the same capability from its screen, with no model
-                    if let Some(capability) = &g.capability {
-                        let input = models.routed_input.borrow().clone();
-                        let screen = Request { channel: Channel::Screen { place: "chat".into() }, task: None, content: Content::Invoke { capability: capability.clone(), input } };
-                        let data = runtime.submit(&mut db.lock().unwrap(), &WHO, screen).unwrap();
-                        if let Body::Data { value, withheld, .. } = &data.body {
-                            let _ = writeln!(report, "B (datos): {value}{}", if withheld.is_empty() { String::new() } else { format!(" · sin mostrar: {withheld:?}") });
+                Body::Answer { text, data, .. } => {
+                    worded += 1;
+                    let _ = writeln!(report, "texto: {text}");
+                    if let Some(data) = data {
+                        // as the screen will show it: each citation with its datum, the field by its id
+                        let mut shown = text.clone();
+                        for c in &data.cited {
+                            let datum = match (&c.field, &c.value) {
+                                (Some(field), v) => format!("«{field} = {v}»"),
+                                (None, v) => format!("«{v}»"),
+                            };
+                            shown = shown.replace(&format!("[[{}]]", c.path), &datum);
                         }
+                        let _ = writeln!(report, "con las citas: {shown}");
+                        let _ = writeln!(report, "datos: {}", data.value);
                     }
+                }
+                Body::Data { value, .. } => {
+                    fallbacks += 1;
+                    // why the words did not hold, as the trail of the task says it
+                    let why: Option<String> = db
+                        .lock()
+                        .unwrap()
+                        .query_row("SELECT outcome FROM kernel_audit WHERE correlation_id = ?1 AND subject = 'ia.responder' ORDER BY rowid DESC LIMIT 1", [&o.task], |r| r.get(0))
+                        .ok();
+                    let _ = writeln!(report, "RESPALDO, solo los datos ({}): {value}", why.unwrap_or_default());
                 }
                 other => {
                     let _ = writeln!(report, "{other:?}");
@@ -282,31 +300,23 @@ fn chat_battery_live() {
     for (category, (o, n)) in &by_category {
         let _ = writeln!(summary, "  {category}: {o} de {n}");
     }
+    let _ = writeln!(summary, "respuestas con texto y datos: {worded} · respaldos a solo datos: {fallbacks}");
     let _ = writeln!(summary, "llamadas: {calls} · tokens: {tokens} · costo: ${cost:.4} MXN · por pregunta: ${:.5} MXN", cost / f64::from(questions.max(1)));
     let _ = writeln!(summary, "(el costo sale de los tokens reales con los precios de pago del modelo, aunque la llave sea del plan gratuito)\n");
     std::fs::write(&out, format!("{summary}{report}")).unwrap();
     println!("{summary}");
 }
 
-/// At most 12 calls per minute: one every five seconds, whatever the provider allows. It keeps the input the router
-/// chose last, to run path B with the same one.
-struct Spaced {
-    models: crate::ai::platform_models::ProviderModels,
-    routed_input: RefCell<Value>,
-}
+/// At most 12 calls per minute: one every five seconds, whatever the provider allows.
+struct Spaced(crate::ai::platform_models::ProviderModels);
 
 impl Models for Spaced {
     fn provider(&self) -> &Provider {
-        self.models.provider()
+        self.0.provider()
     }
 
     fn call(&self, operator: &Operator, to_model: &ToModel) -> Result<Reply, Failure> {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        let reply = self.models.call(operator, to_model);
-        if let (Ok(r), true) = (&reply, operator.id == platform::operators::ROUTE.id) {
-            let input = r.value.get("input").and_then(Value::as_str).and_then(|i| serde_json::from_str(i).ok()).unwrap_or(json!({}));
-            *self.routed_input.borrow_mut() = input;
-        }
-        reply
+        self.0.call(operator, to_model)
     }
 }

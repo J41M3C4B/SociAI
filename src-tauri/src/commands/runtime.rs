@@ -15,7 +15,7 @@ use capability::Registry;
 use kernel::Modules;
 use platform::request::Channel;
 use platform::task::TaskState;
-use platform::{Accounts, Answer, Deliver, Models, Outcome, Request, Runtime, SystemClock, Who};
+use platform::{Accounts, Deliver, Models, Outcome, Request, Runtime, SystemClock, Who};
 
 /// The account as it is now, for the kernel: only while the session is open, not locked and of this same account.
 struct SessionAccounts<'a> {
@@ -32,14 +32,6 @@ impl Accounts for SessionAccounts<'_> {
     }
 }
 
-/// How the chat answers a question, as the settings of the AI say (E1 of IA-4).
-fn answer(conn: &Connection) -> Answer {
-    match crate::ai::settings::load(conn) {
-        Ok(s) if !s.chat_answer_in_words => Answer::Data,
-        _ => Answer::Words,
-    }
-}
-
 /// The rest of a turn of the chat, apart from the window: a model may take seconds, and the app goes on meanwhile.
 /// What it ends with reaches the window as `task-update`.
 fn go_on(app: AppHandle, account: String, organization: String, task: String) {
@@ -50,7 +42,6 @@ fn go_on(app: AppHandle, account: String, organization: String, task: String) {
         let modules = app.state::<Modules>();
         let accounts = SessionAccounts { session: &session };
         let models = ProviderModels::from_settings(&db.0);
-        let answer = db.0.lock().map(|conn| answer(&conn)).unwrap_or_default();
         let deliver = Window(app.clone());
         let runtime = Runtime {
             registry: &registry,
@@ -59,7 +50,6 @@ fn go_on(app: AppHandle, account: String, organization: String, task: String) {
             clock: &SystemClock,
             deliver: &deliver,
             models: models.as_ref().map(|m| m as &dyn Models),
-            answer,
         };
         // a turn that fails here stays running until its time runs out: the next request closes it by its limit
         let _ = runtime.think(&db.0, &Who { account: &account, organization: &organization }, &task);
@@ -100,7 +90,6 @@ pub fn runtime_submit(
         clock: &SystemClock,
         deliver: &deliver,
         models: models.as_ref().map(|m| m as &dyn Models),
-        answer: answer(&conn),
     };
     let outcome = runtime.submit(&mut conn, &Who { account: &user.id, organization: &organization }, request).map_err(|_| UiError::internal())?;
     drop(conn);
@@ -126,6 +115,6 @@ pub fn runtime_task(
     let organization = crate::core::institution::id(&conn).unwrap_or_default();
     let accounts = SessionAccounts { session: &session };
     // asking for a task sends nothing to a model
-    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &accounts, clock: &SystemClock, deliver: &Window(app), models: None, answer: Answer::default() };
+    let runtime = Runtime { registry: &registry, modules: &modules, accounts: &accounts, clock: &SystemClock, deliver: &Window(app), models: None };
     runtime.task(&conn, &Who { account: &user.id, organization: &organization }, &task).map_err(|_| UiError::internal())
 }
