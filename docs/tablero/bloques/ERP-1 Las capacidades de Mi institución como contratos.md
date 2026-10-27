@@ -2,7 +2,7 @@
 tipo: bloque
 id: ERP-1
 carril: erp
-estado: revision
+estado: hecho
 prioridad: alta
 caja: Mi institución; Contratos institucionales
 pedido_por:
@@ -10,7 +10,7 @@ depende_de: IA-1, IA-5, ERP-2, ERP-9, IA-8
 rama: erp/erp-1-mi-institucion-modulo
 adr:
 creado: 2026-10-20
-cerrado:
+cerrado: 2026-10-26
 ---
 
 ## Qué y por qué
@@ -96,18 +96,18 @@ En el PR [#33](https://github.com/J41M3C4B/SociAI/pull/33). `cargo test` (697 pa
 
 **Qué hacer y qué debe pasar:**
 
-- [ ] **Una base de hoy conserva su perfil.** En **Mi institución**, las cuatro ventanas («Su institución», «Contacto y ubicación», «Datos legales y fiscales» y «Capacidad y cifras rápidas») muestran los mismos datos que antes, y lo que falta en Inicio es lo mismo.
-- [ ] **Cada ventana guarda lo suyo.** Cambia un dato en cada una y guarda. Cierra y vuelve a abrir la app: los cambios siguen y las otras ventanas no se movieron.
-- [ ] **Valida como antes:**
+- [x] **Una base de hoy conserva su perfil.** En **Mi institución**, las cuatro ventanas («Su institución», «Contacto y ubicación», «Datos legales y fiscales» y «Capacidad y cifras rápidas») muestran los mismos datos que antes, y lo que falta en Inicio es lo mismo.
+- [x] **Cada ventana guarda lo suyo.** Cambia un dato en cada una y guarda. Cierra y vuelve a abrir la app: los cambios siguen y las otras ventanas no se movieron.
+- [x] **Valida como antes:**
   - un código postal de 4 dígitos (`0670`) marca error;
   - un RFC mal formado marca error, y uno en minúsculas se guarda en mayúsculas;
   - un municipio con números (`Zapopan 45010`) marca error;
   - sin el nombre de la institución no se guarda.
-- [ ] **Nuevo: el teléfono y el correo de la institución se validan.** Un teléfono con letras o un correo sin `@` marcan error al guardar.
-- [ ] **Cambio aceptado (hallazgo 1):** en «Su institución», deja «Cómo atiende» solo en «Comunitario» y guarda. En «Capacidad», los lugares y las personas de hoy ya no aparecen. Si vuelves a «Residencial», se piden de nuevo, vacíos.
-- [ ] **El escáner sigue:** escribe un correo de una persona en «A qué se dedica» y guarda. Debe aparecer el aviso de datos personales.
-- [ ] **Lo que no cambió sigue igual:** el patronato, las cuentas bancarias y el expediente.
-- [ ] **Primer inicio desde cero:** arranca con otra carpeta, en PowerShell: `$env:SOCIAI_DATA_DIR="D:\sociai-prueba"; pnpm tauri dev`. Llena los pasos. Al poner el último dato indispensable, el primer inicio termina y entras a la app.
+- [x] **Nuevo: el teléfono y el correo de la institución se validan.** Un teléfono con letras o un correo sin `@` marcan error al guardar.
+- [x] **Cambio aceptado (hallazgo 1):** en «Su institución», deja «Cómo atiende» solo en «Comunitario» y guarda. En «Capacidad», los lugares y las personas de hoy ya no aparecen. Si vuelves a «Residencial», se piden de nuevo, vacíos.
+- [x] **El escáner sigue:** escribe un correo de una persona en «A qué se dedica» y guarda. Debe aparecer el aviso de datos personales.
+- [x] **Lo que no cambió sigue igual:** el patronato, las cuentas bancarias y el expediente.
+- [x] **Primer inicio desde cero:** arranca con otra carpeta, en PowerShell: `$env:SOCIAI_DATA_DIR="D:\sociai-prueba"; pnpm tauri dev`. Llena los pasos. Al poner el último dato indispensable, el primer inicio termina y entras a la app.
 
 ## Hallazgos
 
@@ -115,7 +115,7 @@ En el PR [#33](https://github.com/J41M3C4B/SociAI/pull/33). `cargo test` (697 pa
 - **El teléfono y el correo de la institución se validan al guardar** con las reglas del núcleo. Antes solo daban un aviso.
 - **Un guardado que toma datos de un documento deja dos cambios en el historial:** uno por cada documento y página, con el documento como origen, y otro con lo que escribió la persona. El núcleo guarda un origen por cambio. Para eso hace falta una sesión: sin persona, el origen es «de los ejemplos».
 - **Marcar una sugerencia como aceptada va después del guardado**, en otra transacción. Si la app se cerrara justo entre los dos, la sugerencia de un campo ya lleno ya no se muestra, así que no se nota.
-- **El contacto y la dirección de la institución son `confidential` a propósito.** Así se conserva la regla de hoy (ADR-033 §3: de dónde está, a la IA solo le llegan el municipio y el estado). No sale de la propuesta del IA-3, que pone en `confidential` el RFC, la CLABE y los folios. Consecuencia: con la tabla del IA-3, ningún modelo los ve, y un operador del IA-4 no podría proponerlos desde un acta; las reglas del lector sí. Pasarlos a `internal` bajaría su protección: eso lo decide el líder.
+- **El contacto y la dirección de la institución son `confidential` a propósito.** Así se conserva la regla de hoy (ADR-033 §3: de dónde está, a la IA solo le llegan el municipio y el estado). No sale de la propuesta del IA-3, que pone en `confidential` el RFC, la CLABE y los folios. Consecuencia: con la tabla del IA-3, ningún modelo los ve, y un operador del IA-4 no podría proponerlos desde un acta; las reglas del lector sí. Pasarlos a `internal` bajaría su protección: eso lo decide el líder. **Decidido (2026-10-26): se quedan en `confidential`.** Proyectos no los necesita en manos de la IA, y en la redacción se rellenan a mano. Se revisa si un operador llega a necesitarlos.
 - **El perfil tiene un id fijo (`profile`):** una base es una institución (D4). Si un día hubiera varias, el id sería el de la organización (K1).
 - **Las columnas viejas de `institution` y `institution_profile` se quedan con lo que tenían.** Nadie las lee ya para el perfil. La fila de `institution` sigue para el primer inicio y para atar los proyectos, y la de `institution_profile` para las líneas anónimas de personal y población.
 - **Proyectos (congelado):** «perfil confirmado» ahora cuenta desde que terminó el primer inicio (D3).
@@ -125,3 +125,5 @@ En el PR [#33](https://github.com/J41M3C4B/SociAI/pull/33). `cargo test` (697 pa
   - riel de diseño: tres mensajes y el nombre de un campo en `es-MX.ts`, y quité dos funciones sin uso de `lib/tauri.ts`.
 
 ## Resultado
+
+Validado por el líder el 2026-10-26, con el primer inicio desde cero, y fusionado en el PR [#33](https://github.com/J41M3C4B/SociAI/pull/33) (`199d200`). Mi institución es el primer módulo con la forma nueva: su catálogo, sus ventanas, su tabla y sus capacidades sobre el núcleo. La app lee y guarda el perfil a través de él, y una base de antes le pasa su perfil y su historial una vez. El contacto y la dirección se quedan en `confidential`. Desbloquea el IA-4 y el ERP-3.
