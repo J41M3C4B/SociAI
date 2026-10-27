@@ -67,7 +67,7 @@ Las notas del líder (2026-10-26) van tal como las escribió. La última columna
 
 | | Decisión | Lo que recomendó el riel IA | Lo que dijo el líder | Cómo queda |
 |---|---|---|---|---|
-| **E1** | Quién escribe la respuesta del chat | Un operador, `ia.responder`, con la evidencia que pone la plataforma | «Probemos ambos caminos para ver cual da mejores resultados.» | **Se hacen los dos** (A: el operador; B: los `Datos`, sin otra llamada), con un interruptor en la configuración de la plataforma. La corrida real los pone lado a lado. Con el resultado, el líder elige y el otro sale. |
+| **E1** | Quién escribe la respuesta del chat | Un operador, `ia.responder`, con la evidencia que pone la plataforma | «Probemos ambos caminos para ver cual da mejores resultados.» | **Se hicieron los dos,** y la primera corrida real los puso lado a lado. **Decisión del líder (2026-10-27): combinarlos.** El texto del modelo da el contexto y el orden, y cita cada dato como `[[ruta]]` en vez de escribirlo. La respuesta lleva los datos exactos de la capacidad. Si una cita no existe, si se copia un dato o si se inventa una cifra, la persona recibe solo los datos. El interruptor salió. |
 | **E2** | Qué puede empezar el chat | Solo consultas; los cambios, con el bloque del agente | «No podemos ser bloqueantes en este aspecto por que el uso de la IA para rellenar no es un complemento, la IA debe hacerlo por el principio de eliminar o disminuir la frccion de la UX con personas no tecnicas. Hay que pensar bien esta funcionalidad.» | **Dos bloques seguidos** (2026-10-27): este, solo preguntar; llenar va en el [[IA-9 Llenar desde el chat\|IA-9]], con su propio ADR, y se toma en cuanto este pase a revisión. |
 | **E3** | La corrida real | El plan gratuito de Gemini con `fixtures/` | «Vale continuamos con la API de google gratis, nada cambia, el entorno debe trabajar como el produccion pero con fixtures sinteticos.» | **Aprobada.** La corrida usa el mismo camino que producción: solo cambian la llave, el modelo y los datos, que son los ficticios de `fixtures/`. |
 | **E4** | La memoria de la conversación | La tarea guarda sus turnos, y el enrutador recibe el anterior por la política | «Vale solo que si hay que tener presente la prioridad de la memoria de la conversacion, el contexto y la pregunta o interaccion actual, para evitar forzar la memoria en una pregunta o consulta donde el contexto ya no pertenece» | **Aprobada, con el orden que pide el líder:** primero la pregunta de ahora, después el contexto y al final la memoria. El enrutador dice si el texto continúa el turno anterior. Si no, el anterior no llega a nadie. La batería tiene casos de cambio de tema. |
@@ -149,6 +149,20 @@ Las notas del líder (2026-10-26) van tal como las escribió. La última columna
 - [ ] 
 
 ## Hallazgos
+
+- **Avance al 2026-10-27, para retomar.**
+  - **Dónde está:** rama `ia/ia-4-enrutador-y-primer-operador`, con 4 commits arriba; todavía sin PR. `cargo test` y la batería simulada pasan.
+  - **La primera corrida real** (dos caminos separados): 20 de 20 aciertos, $0.014 MXN por pregunta.
+  - **La segunda corrida real** (combinada): 19 de 20 aciertos, pero solo 4 de 10 respuestas pasaron la revisión con su texto. Las 6 de «¿qué me falta?» cayeron al respaldo de solo datos.
+    - **Causa probable:** la revisión de «valor copiado» tomaba la palabra «legal» por el código de ventana `legal`. Ya está corregida: solo revisa los datos de la institución, no los códigos del programa. Además, el modelo ya puede citar un elemento completo (`[[missing[0]]]`).
+    - **«Enséñame el perfil» falló** con `not_offered`: el modelo nombró algo fuera de la lista, y la plataforma lo bloqueó como debe.
+  - **Lo que sigue** (el líder lo dejó para el 2026-10-28):
+    1. La tercera corrida, con el rastro encendido (`SOCIAI_AI_TRACE`) y el motivo de cada respaldo en la salida: unas 29 llamadas, una cada 5 segundos.
+    2. Luego, el `rebase`, el «Cómo probarlo», el PR y el acuerdo con el riel de diseño (DIS-1).
+- **Los nombres de los campos en las respuestas.** El chat necesita los nombres de pantalla de los campos para dibujar las citas, y hoy viven en `src/i18n/es-MX.ts`.
+  - `mi_institucion.que_falta` da el id corto del campo (`populations`), no el id completo del diccionario. Así, la pantalla no puede nombrarlo igual que en todas partes.
+  - Es un pedido técnico al riel ERP: que dé el id completo.
+- **«¿Cuál va primero?»** solo puede contestarse con certeza si los datos dicen el orden: qué es indispensable o qué bloquea otra cosa. Eso es del riel ERP. Mientras tanto, el operador dice que no hay un orden indicado.
 
 - **Escrito al planear (2026-10-26). «Pocas opciones por intención»** (P4) hoy se cumple solo: hay cuatro capacidades. Cuando haya decenas, hará falta un primer filtro por código (por módulo o por lugar) antes del enrutador. El tope de candidatas lo deja visible: si se pasa, la batería lo marca.
 - **El Asistente de hoy** (`ai/agent.rs`) sigue vivo en este bloque. Se retira cuando el chat nuevo haga lo mismo, con el bloque del agente y el DIS-1.
